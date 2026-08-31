@@ -1,0 +1,5 @@
+﻿# Paste your YouTube playlist or video URLs below (one per line):
+# https://www.youtube.com/playlist?list=YOUR_PLAYLIST_ID
+# https://www.youtube.com/watch?v=YOUR_VIDEO_ID
+https://www.youtube.com/watch?v=9lAvk3InFnY&list=PLIVBwwipvujVvKEPiHViSnGGXICzLwzYL
+https://www.youtube.com/watch?v=5q_7Qtv_QaA&list=PLX2SHiKfualG_m1yBmcwQuuyQYq5u69EY

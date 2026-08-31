@@ -1,0 +1,39 @@
+# Environment & Secrets
+.env
+token.json
+client_secret*.json
+
+# Virtual Environment & Python Cache
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Local AI Models & Binaries (Large Files)
+models/
+tools/
+*.bin
+*.onnx
+
+# Data Directories & Run Artifacts
+data/videos/
+data/runs/
+data/output/
+data/logs/
+data/input/
+data/test_tts/
+data/completed_videos.csv
+data/completed_videos.txt
+data/state.json
+assets/generated/
+
+# Media Files
+*.mp3
+*.wav
+*.m4a
+*.webm
+*.mp4
+*.mkv
+*.flac
