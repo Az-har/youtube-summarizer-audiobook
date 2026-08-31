@@ -34,6 +34,16 @@ class Settings:
     tts_voice_english: str = ""
     ffmpeg_binary: str = "ffmpeg"
     ytdlp_binary: str = "yt-dlp"
+    # YouTube Music Podcast Publisher Settings
+    podcast_publisher_mode: str = "rss"  # "rss", "youtube_video", "ytmusic_library", "none"
+    podcast_title: str = "AI Audiobook & Video Summaries"
+    podcast_author: str = "AI Audiobook Director"
+    podcast_description: str = "Factual AI Audiobook summaries generated from YouTube playlists."
+    podcast_base_url: str = "http://localhost:8000"
+    youtube_podcast_playlist_id: str = ""
+    youtube_privacy_status: str = "unlisted"
+    youtube_client_secret_file: str = "client_secret.json"
+    ytmusic_auth_file: str = "oauth.json"
 
 
 @dataclass

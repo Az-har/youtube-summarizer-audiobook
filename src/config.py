@@ -36,6 +36,15 @@ def load_settings(root: Path) -> Settings:
         tts_voice_english=env("TTS_VOICE_ENGLISH", ""),
         ffmpeg_binary=env("FFMPEG_BINARY", "ffmpeg"),
         ytdlp_binary=env("YTDLP_BINARY", "yt-dlp"),
+        podcast_publisher_mode=env("PODCAST_PUBLISHER_MODE", "rss"),
+        podcast_title=env("PODCAST_TITLE", "AI Audiobook & Video Summaries"),
+        podcast_author=env("PODCAST_AUTHOR", "AI Audiobook Director"),
+        podcast_description=env("PODCAST_DESCRIPTION", "Factual AI Audiobook summaries generated from YouTube playlists."),
+        podcast_base_url=env("PODCAST_BASE_URL", "http://localhost:8000").rstrip("/"),
+        youtube_podcast_playlist_id=env("YOUTUBE_PODCAST_PLAYLIST_ID", ""),
+        youtube_privacy_status=env("YOUTUBE_PRIVACY_STATUS", "unlisted"),
+        youtube_client_secret_file=env("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json"),
+        ytmusic_auth_file=env("YTMUSIC_AUTH_FILE", "oauth.json"),
     )
 
 

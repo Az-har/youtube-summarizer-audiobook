@@ -115,7 +115,22 @@ class SupervisorAgent(BaseAgent):
         )
 
         # -------------------------------------------------------------
-        # 6. Emit Scorecard
+        # 6. YouTube Music Podcast Publishing Stage
+        # -------------------------------------------------------------
+        from src.publishers import get_podcast_publisher
+        publisher = get_podcast_publisher(context.settings)
+        if publisher and audio_out_path and Path(audio_out_path).exists():
+            pub_res = publisher.publish_episode(
+                video=context.video,
+                audio_path=Path(audio_out_path),
+                summary_text=edit_res.get("script", ""),
+                thumbnail_path=context.state.get("thumbnail_path"),
+                duration_seconds=context.state.get("duration_seconds", 0.0),
+            )
+            context.state["podcast_publishing"] = pub_res
+
+        # -------------------------------------------------------------
+        # 7. Emit Scorecard
         # -------------------------------------------------------------
         print("\n  " + "=" * 55)
         print(f"  🏆 AGENT QUALITY SCORECARD: {scorecard.overall_status} (Score: {scorecard.overall_score}/10)")
