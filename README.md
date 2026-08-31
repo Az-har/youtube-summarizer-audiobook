@@ -20,30 +20,30 @@
 ```mermaid
 flowchart TD
     subgraph INGESTION ["1. Ingestion Layer"]
-        YT[YouTube Playlist / Video URL] --> IA[Ingestion Agent]
-        LF[Local Media in data/input/] --> IA
-        IA -->|16kHz Normalized WAV + Thumbnail + Chapters| TA[Acoustic Perception Agent]
+        YT["YouTube Playlist / Video URL"] --> IA["Ingestion Agent"]
+        LF["Local Media in data/input/"] --> IA
+        IA -->|"16kHz Normalized WAV + Thumbnail + Chapters"| TA["Acoustic Perception Agent"]
     end
 
     subgraph ACOUSTIC ["2. Acoustic Perception"]
-        TA -->|AMD Vulkan Whisper large-v3| VAD{Silero VAD & Loop Shield}
-        VAD -->|Timestamped Paragraph Transcript| EA[Editorial Agent]
+        TA -->|"AMD Vulkan Whisper large-v3"| VAD{"Silero VAD & Loop Shield"}
+        VAD -->|"Timestamped Paragraph Transcript"| EA["Editorial Agent"]
     end
 
     subgraph EDITORIAL ["3. Multi-Turn LLM Editor (Local Ollama)"]
-        EA --> G1[Section Drafter]
-        G1 --> G2[Sponsor / Promo Purger]
-        G2 --> G3[Spoken Narrative Polish]
-        G3 --> G4[Factual Consistency Critic]
+        EA --> G1["Section Drafter"]
+        G1 --> G2["Sponsor / Promo Purger"]
+        G2 --> G3["Spoken Narrative Polish"]
+        G3 --> G4["Factual Consistency Critic"]
         G4 -- "Score < 8.0" --> G3
-        G4 -- "PASS (Score >= 8.0)" --> AA[Audiobook Director Agent]
+        G4 -- "PASS (Score >= 8.0)" --> AA["Audiobook Director Agent"]
     end
 
     subgraph AUDIOBOOK ["4. Audiobook Mastering & Packaging"]
-        AA --> TTS[Neural Voice Synthesis (Edge-TTS)]
-        TTS --> MAST[FFmpeg EBU R128 Mastering -16 LUFS]
-        MAST --> ID3[Mutagen ID3v2 Tags + Cover Art + Chapters]
-        ID3 --> OUT[data/output/ + Quality Scorecard]
+        AA --> TTS["Neural Voice Synthesis (Edge-TTS)"]
+        TTS --> MAST["FFmpeg EBU R128 Mastering -16 LUFS"]
+        MAST --> ID3["Mutagen ID3v2 Tags + Cover Art + Chapters"]
+        ID3 --> OUT["data/output/ + Quality Scorecard"]
     end
 ```
 
