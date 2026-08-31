@@ -116,20 +116,28 @@ class YouTubeVideoPublisher(BasePodcastPublisher):
             }
 
         try:
+            print(f"  [YouTubePublisher] Uploading to YouTube channel...", flush=True)
             uploaded_id = self._upload_to_youtube(video, output_mp4, summary_text, client_secret)
+            video_url = f"https://youtu.be/{uploaded_id}"
+            print(f"  🎉 [YouTubePublisher] Upload Complete! Watch/Listen: {video_url}", flush=True)
             return {
                 "status": "SUCCESS",
                 "mode": "youtube_video",
                 "uploaded_video_id": uploaded_id,
-                "video_url": f"https://www.youtube.com/watch?v={uploaded_id}",
+                "video_url": video_url,
             }
         except Exception as exc:
-            logger.warning(f"YouTube upload failed: {exc}")
+            err_msg = str(exc)
+            if "quotaExceeded" in err_msg or "uploadLimitExceeded" in err_msg:
+                print(f"  ⚠️ [YouTubePublisher] Daily YouTube upload quota reached (free limit: ~6 videos/day).", flush=True)
+                print(f"     Video is safely saved locally at: {output_mp4.name}", flush=True)
+            else:
+                print(f"  ⚠️ [YouTubePublisher] Upload failed ({exc}). Video saved locally at: {output_mp4.name}", flush=True)
             return {
                 "status": "RENDERED_LOCAL",
                 "mode": "youtube_video",
                 "video_path": str(output_mp4),
-                "error": str(exc),
+                "error": err_msg,
             }
 
     def _resolve_client_secret(self) -> Path | None:
