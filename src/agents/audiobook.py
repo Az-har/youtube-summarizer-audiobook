@@ -60,12 +60,12 @@ class AudiobookAgent(BaseAgent):
         thumb_path = context.state.get("thumbnail_path")
         chapters = context.state.get("chapters", [])
         
-        self.log(context, "Embedding cover art, ID3v2 tags, and chapter markers into audiobook...")
+        self.log(context, f"Embedding cover art, ID3v2 tags (Artist: {context.settings.podcast_author}), and chapters...")
         embed_audiobook_metadata(
             audio_file=output_audio,
             title=context.video.title,
-            artist=context.video.channel_title or "AI Audiobook",
-            album="YouTube Audiobooks",
+            artist=context.settings.podcast_author or context.video.channel_title or "Azhar",
+            album=context.settings.podcast_playlist_name or "Azhar's AI Audiobooks",
             thumbnail_file=thumb_path,
             chapters=chapters,
         )

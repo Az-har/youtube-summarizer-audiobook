@@ -37,7 +37,8 @@ class Settings:
     # YouTube Music Podcast Publisher Settings
     podcast_publisher_mode: str = "rss"  # "rss", "youtube_video", "ytmusic_library", "none"
     podcast_title: str = "AI Audiobook & Video Summaries"
-    podcast_author: str = "AI Audiobook Director"
+    podcast_author: str = "Azhar"
+    podcast_playlist_name: str = "Azhar's AI Audiobooks"
     podcast_description: str = "Factual AI Audiobook summaries generated from YouTube playlists."
     podcast_base_url: str = "http://localhost:8000"
     youtube_podcast_playlist_id: str = ""
