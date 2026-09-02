@@ -11,9 +11,10 @@ def remove_repeated_words(text: str) -> str:
     return re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
 
 
-def remove_repeated_phrases(text: str, max_phrase_len: int = 4) -> str:
+def remove_repeated_phrases(text: str, max_phrase_len: int = 32) -> str:
     """
-    Removes repeated consecutive phrases that Whisper sometimes produces on music/noise.
+    Removes repeated consecutive phrases that Whisper produces on music/silence/noise loops.
+    Handles short stutters up to long looping sentences (up to 32 words).
     """
     words = text.split()
     if len(words) < 4:
@@ -21,10 +22,12 @@ def remove_repeated_phrases(text: str, max_phrase_len: int = 4) -> str:
 
     cleaned: list[str] = []
     i = 0
+    limit = min(max_phrase_len, len(words) // 2)
+
     while i < len(words):
         found_repeat = False
-        # Check phrase lengths from max_phrase_len down to 2 words
-        for p_len in range(max_phrase_len, 1, -1):
+        # Check phrase lengths from limit down to 2 words
+        for p_len in range(limit, 1, -1):
             if i + 2 * p_len <= len(words):
                 phrase1 = [w.lower() for w in words[i : i + p_len]]
                 phrase2 = [w.lower() for w in words[i + p_len : i + 2 * p_len]]
@@ -53,7 +56,7 @@ def clean_transcript_text(text: str) -> str:
     text = re.sub(r'\[(music|applause|laughter|silence|cheering|noise|no audio)\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\((music|applause|laughter|silence|cheering|noise)\)', '', text, flags=re.IGNORECASE)
     text = remove_repeated_words(text)
-    text = remove_repeated_phrases(text, max_phrase_len=8)
+    text = remove_repeated_phrases(text, max_phrase_len=32)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 

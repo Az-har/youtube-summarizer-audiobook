@@ -111,9 +111,16 @@ class DaemonService:
                     self.queue.update_status(task.task_id, "FAILED", "No videos found at URL")
                     return
 
+                from src.history import completed_ids, append_completed
+                completed = completed_ids(self.settings.completed_file)
                 for index, video in enumerate(videos, start=1):
+                    if video.video_id in completed:
+                        self.logger.info(f"Skipping already-completed YouTube video: {video.video_id}")
+                        continue
                     self.logger.info(f"Processing YouTube video {index}/{len(videos)}: {video.title}")
-                    process_video_agentic(self.settings, video)
+                    res = process_video_agentic(self.settings, video)
+                    if res.status == "completed":
+                        append_completed(self.settings.completed_file, video.video_id)
 
                 self.queue.update_status(task.task_id, "COMPLETED")
                 self.logger.info(f"Completed YouTube task: {task.task_id}")

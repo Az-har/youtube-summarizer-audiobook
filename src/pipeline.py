@@ -39,8 +39,11 @@ def process_url(settings: Settings, url: str, dry_run: bool = False) -> list[Pro
 
         try:
             result = process_video(settings, video)
-            append_completed(settings.completed_file, video.video_id)
-            print(f"Successfully processed {video.video_id}! Summary saved to {result.summary_path}")
+            if result.status == "completed":
+                append_completed(settings.completed_file, video.video_id)
+                print(f"Successfully processed {video.video_id}! Summary saved to {result.summary_path}")
+            else:
+                print(f"Video {video.video_id} did not pass QA ({result.status}). Not marked as completed.")
         except Exception as exc:
             print(f"Failed processing {video.video_id}: {exc}")
             result = ProcessResult(video=video, status="failed", message=str(exc))
@@ -73,8 +76,11 @@ def process_local_files(settings: Settings, input_dir: Path, dry_run: bool = Fal
 
         try:
             result = process_video(settings, video)
-            append_completed(settings.completed_file, video.video_id)
-            print(f"Successfully processed {video.video_id}! Summary saved to {result.summary_path}")
+            if result.status == "completed":
+                append_completed(settings.completed_file, video.video_id)
+                print(f"Successfully processed {video.video_id}! Summary saved to {result.summary_path}")
+            else:
+                print(f"Video {video.video_id} did not pass QA ({result.status}). Not marked as completed.")
         except Exception as exc:
             print(f"Failed processing {video.video_id}: {exc}")
             result = ProcessResult(video=video, status="failed", message=str(exc))

@@ -156,11 +156,13 @@ def process_video_agentic(settings: Settings, video: Video) -> ProcessResult:
     supervisor = SupervisorAgent()
 
     result = supervisor.run(context)
+    scorecard = result.get("scorecard")
+    status = "completed" if (scorecard and scorecard.overall_status in ("PASS", "WARN")) else "failed"
     return ProcessResult(
         video=video,
-        status="completed",
+        status=status,
         transcript_path=result.get("transcript_path", ""),
         summary_path=result.get("summary_path", ""),
         audio_path=result.get("audio_path", ""),
-        scorecard=result.get("scorecard"),
+        scorecard=scorecard,
     )
