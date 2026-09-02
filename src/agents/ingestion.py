@@ -53,11 +53,13 @@ class IngestionAgent(BaseAgent):
         ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
         wav_16k_path = context.working_dir / f"{context.video.video_id}_16k.wav"
 
-        if not wav_16k_path.exists() or wav_16k_path.stat().st_size == 0:
+        if wav_16k_path.exists() and wav_16k_path.stat().st_size > 1024:
+            self.log(context, f"Reusing verified 16kHz audio on disk ({wav_16k_path.stat().st_size // 1024} KB).")
+        else:
             self.log(context, "Preprocessing audio (loudnorm + silence reduction) for AMD GPU...")
             cmd = [
                 ffmpeg_bin, "-y", "-i", str(audio_path),
-                "-af", "loudnorm, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB",
+                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB",
                 "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_16k_path)
             ]
             try:

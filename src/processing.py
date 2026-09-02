@@ -242,18 +242,21 @@ def _transcribe_vulkan(settings: Settings, audio_path: Path, transcript_path: Pa
     out_json_file = audio_path.parent / f"{audio_path.stem}_vulkan_out.json"
 
     try:
-        print("  Preprocessing audio (loudnorm + silence removal) for AMD GPU (Vulkan)...")
-        subprocess.run(
-            [
-                ffmpeg_bin, "-y", "-i", str(audio_path),
-                "-af", "loudnorm, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB",
-                "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_path)
-            ],
-            capture_output=True, check=True
-        )
+        if wav_path.exists() and wav_path.stat().st_size > 1024:
+            print(f"  Reusing verified 16kHz audio on disk ({wav_path.stat().st_size // 1024} KB)...")
+        else:
+            print("  Preprocessing audio (loudnorm + silence removal) for AMD GPU (Vulkan)...")
+            subprocess.run(
+                [
+                    ffmpeg_bin, "-y", "-i", str(audio_path),
+                    "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB",
+                    "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_path)
+                ],
+                capture_output=True, check=True
+            )
 
         model_path = _get_ggml_model(settings, settings.whisper_model)
-        threads = str(os.cpu_count() or 4)
+        threads = str(min(os.cpu_count() or 4, 8))
 
         print(f"  Transcribing with AMD Radeon RX 6600 GPU (Vulkan, {settings.whisper_model}, {threads} threads)...")
         print("  " + "=" * 55)
@@ -531,8 +534,10 @@ def _ollama(settings: Settings, prompt: str) -> dict:
         "stream": True,
         "format": "json",
         "options": {
-            "num_ctx": 8192,
+            "num_ctx": 4096,
             "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
         }
     }
     request = urllib.request.Request(

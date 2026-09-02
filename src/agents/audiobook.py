@@ -40,11 +40,11 @@ class AudiobookAgent(BaseAgent):
         mastered_audio = context.working_dir / "narration_mastered.mp3"
         ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
 
-        self.log(context, "Mastering audiobook with EBU R128 loudness normalization...")
+        self.log(context, "Mastering audiobook with EBU R128 loudness normalization (linear mode)...")
         try:
             cmd = [
                 ffmpeg_bin, "-y", "-i", str(output_audio),
-                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5, silenceremove=stop_periods=-1:stop_duration=2:stop_threshold=-45dB",
+                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-45dB",
                 "-c:a", "libmp3lame", "-b:a", "192k", str(mastered_audio)
             ]
             subprocess.run(cmd, capture_output=True, check=True, timeout=120)

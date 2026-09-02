@@ -35,8 +35,9 @@ def _call_critic_ollama(settings: Settings, prompt: str) -> dict:
         "stream": False,
         "format": "json",
         "options": {
-            "num_ctx": 8192,
+            "num_ctx": 4096,
             "temperature": 0.1,  # Low temperature for strict, reliable valuation
+            "top_p": 0.9,
         },
     }
     req = urllib.request.Request(

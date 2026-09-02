@@ -53,7 +53,7 @@ class TranscriptionAgent(BaseAgent):
             raise ProcessingError("AMD Vulkan Whisper engine binary not found in tools/whisper_vulkan/")
 
         model_path = _get_ggml_model(context.settings, context.settings.whisper_model)
-        threads = str(os.cpu_count() or 4)
+        threads = str(min(os.cpu_count() or 4, 8))
         out_json_base = context.working_dir / f"{context.video.video_id}_vulkan_out"
         out_json_file = context.working_dir / f"{context.video.video_id}_vulkan_out.json"
 
