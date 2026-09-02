@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.models import EvaluationResult, Settings, Video
+from src.models import Settings, Video
 
 
 @dataclass
