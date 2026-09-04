@@ -103,3 +103,56 @@ class ProcessResult:
     warnings: list[str] = field(default_factory=list)
     scorecard: QualityScorecard | None = None
 
+
+class DictAccessMixin:
+    """Provides backward-compatible dict access (__getitem__, get, keys) to dataclass DTOs."""
+
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            val = getattr(self, item)
+            return str(val) if isinstance(val, Path) and item.endswith("_path") and False else val
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+    def __contains__(self, item: str) -> bool:
+        return hasattr(self, item)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+
+
+@dataclass
+class IngestionResult(DictAccessMixin):
+    audio_path: Path
+    duration_seconds: float
+    thumbnail_path: Path | None = None
+    chapters: list[dict[str, Any]] = field(default_factory=list)
+    wav_16k_path: Path | None = None
+
+
+@dataclass
+class TranscriptionResult(DictAccessMixin):
+    transcript_path: Path
+    txt_path: Path
+    transcript_data: dict[str, Any]
+    audit_result: EvaluationResult | None = None
+
+
+@dataclass
+class EditorialResult(DictAccessMixin):
+    narration_path: Path
+    summary_path: Path
+    script: str
+    target_language: str = "English"
+    critic_score: float = 0.0
+
+
+@dataclass
+class AudiobookResult(DictAccessMixin):
+    audio_path: Path | None = None
+    audio_guard_score: float = 0.0
+    audit_result: EvaluationResult | None = None
+
+

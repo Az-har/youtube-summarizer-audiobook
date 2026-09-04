@@ -6,15 +6,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.models import Settings, Video
+from src.models import (
+    AudiobookResult,
+    EditorialResult,
+    IngestionResult,
+    Settings,
+    TranscriptionResult,
+    Video,
+)
 
 
 @dataclass
 class AgentContext:
+    """
+    Execution context holding configurations, target video, workspace directory,
+    and strongly-typed stage DTOs.
+    """
     settings: Settings
     video: Video
     working_dir: Path
     state: dict[str, Any] = field(default_factory=dict)
+    ingestion_result: IngestionResult | None = None
+    transcription_result: TranscriptionResult | None = None
+    editorial_result: EditorialResult | None = None
+    audiobook_result: AudiobookResult | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("Agent"))
 
 
@@ -25,7 +40,7 @@ class BaseAgent(ABC):
         self.name = name
 
     @abstractmethod
-    def run(self, context: AgentContext) -> dict[str, Any]:
+    def run(self, context: AgentContext) -> Any:
         """Execute the agent's specialized task."""
         raise NotImplementedError
 

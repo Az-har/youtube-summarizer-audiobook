@@ -1,26 +1,30 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from src.agents.base import AgentContext, BaseAgent
 from src.downloader import download_audio
+from src.models import IngestionResult
 from src.processing import ProcessingError, _find_ffmpeg, _get_audio_duration
+
+logger = logging.getLogger("IngestionAgent")
 
 
 class IngestionAgent(BaseAgent):
     """
     Ingestion Agent: Handles media discovery, downloading, audio stream normalization,
-    and 16kHz standard format conversion.
+    and 16kHz standard format conversion. Returns typed IngestionResult.
     """
 
     def __init__(self) -> None:
         super().__init__("IngestionAgent")
 
-    def run(self, context: AgentContext) -> dict[str, Any]:
+    def run(self, context: AgentContext) -> IngestionResult:
         self.log(context, f"Acquiring source audio for: {context.video.title} ({context.video.video_id})...")
-        
+
         # 1. Download or fetch local source audio
         audio_path = download_audio(context.video, context.working_dir, context.settings.ytdlp_binary)
         if not audio_path.exists():
@@ -38,12 +42,13 @@ class IngestionAgent(BaseAgent):
             try:
                 import urllib.request
                 urllib.request.urlretrieve(thumb_url, str(thumbnail_path))
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Maxres thumbnail unavailable ({exc}), trying HQ fallback...")
                 try:
                     fallback_url = f"https://i.ytimg.com/vi/{context.video.video_id}/hqdefault.jpg"
                     urllib.request.urlretrieve(fallback_url, str(thumbnail_path))
-                except Exception:
-                    pass
+                except Exception as fallback_exc:
+                    logger.debug(f"Thumbnail download failed: {fallback_exc}")
 
         chapters = context.video.raw.get("chapters", [])
         if chapters:
@@ -71,10 +76,12 @@ class IngestionAgent(BaseAgent):
                     "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_16k_path)
                 ], capture_output=True, check=True)
 
-        return {
-            "source_audio_path": audio_path,
-            "wav_16k_path": wav_16k_path,
-            "thumbnail_path": thumbnail_path if thumbnail_path.exists() else None,
-            "chapters": chapters,
-            "duration_seconds": duration,
-        }
+        result = IngestionResult(
+            audio_path=audio_path,
+            duration_seconds=duration,
+            thumbnail_path=thumbnail_path if thumbnail_path.exists() else None,
+            chapters=chapters,
+            wav_16k_path=wav_16k_path,
+        )
+        context.ingestion_result = result
+        return result

@@ -4,19 +4,23 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from mutagen.id3 import (
-    APIC,
-    CHAP,
-    CTOC,
-    ID3,
-    TALB,
-    TCON,
-    TIT2,
-    TPE1,
-    TYER,
-    ID3NoHeaderError,
-)
-from mutagen.mp3 import MP3
+try:
+    from mutagen.id3 import (
+        APIC,
+        CHAP,
+        CTOC,
+        ID3,
+        TALB,
+        TCON,
+        TIT2,
+        TPE1,
+        TYER,
+        ID3NoHeaderError,
+    )
+    from mutagen.mp3 import MP3
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
 
 logger = logging.getLogger("MetadataEmbedder")
 
@@ -35,6 +39,10 @@ def embed_audiobook_metadata(
     into an MP3 audiobook file.
     """
     if not audio_file.exists():
+        return False
+
+    if not MUTAGEN_AVAILABLE:
+        logger.warning("mutagen is not installed. Skipping ID3 metadata embedding.")
         return False
 
     try:

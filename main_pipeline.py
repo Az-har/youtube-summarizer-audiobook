@@ -51,10 +51,9 @@ def main() -> int:
         help="Test local TTS voice synthesis with sample text",
     )
     parser.add_argument(
-        "--language",
-        choices=["Tamil", "English"],
-        default="English",
-        help="Language for TTS test",
+        "--concurrent",
+        action="store_true",
+        help="Enable overlapped concurrency for batch processing (downloads next video while processing current)",
     )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
@@ -85,7 +84,7 @@ def main() -> int:
         # 1. Check for local media directory if specified or in data/input
         input_dir = Path(args.input) if args.input else (settings.data_dir / "input")
         if input_dir.exists() and any(input_dir.iterdir()):
-            local_results = process_local_files(settings, input_dir, dry_run=args.dry_run)
+            local_results = process_local_files(settings, input_dir, dry_run=args.dry_run, concurrent=args.concurrent)
             all_results.extend(local_results)
 
         # 2. Check for YouTube URLs (from CLI arg, --file, or playlists.txt)
@@ -95,10 +94,10 @@ def main() -> int:
             url_path = Path(args.url)
             if url_path.is_file():
                 local_dir = url_path.parent
-                local_results = process_local_files(settings, local_dir, dry_run=args.dry_run)
+                local_results = process_local_files(settings, local_dir, dry_run=args.dry_run, concurrent=args.concurrent)
                 all_results.extend(local_results)
             elif url_path.is_dir():
-                local_results = process_local_files(settings, url_path, dry_run=args.dry_run)
+                local_results = process_local_files(settings, url_path, dry_run=args.dry_run, concurrent=args.concurrent)
                 all_results.extend(local_results)
             else:
                 target_urls.append(args.url)
@@ -110,7 +109,7 @@ def main() -> int:
                 target_urls = load_playlist_urls(default_file)
 
         for url in target_urls:
-            results = process_url(settings, url, dry_run=args.dry_run)
+            results = process_url(settings, url, dry_run=args.dry_run, concurrent=args.concurrent)
             all_results.extend(results)
 
         if not all_results and not target_urls:

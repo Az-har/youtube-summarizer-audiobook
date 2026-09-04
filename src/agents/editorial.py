@@ -1,63 +1,79 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from src.agents.base import AgentContext, BaseAgent
 from src.evaluators import judge_summary, refine_summary_with_critique
+from src.models import EditorialResult, TranscriptionResult
 from src.processing import (
     ProcessingError,
     _format_time,
     _is_narration_complete,
     _prepare_chunk,
-    _transcript_chunks,
     ensure_ollama_running,
+    semantic_transcript_chunks,
 )
+from src.storage import StorageManager
+
+logger = logging.getLogger("EditorialAgent")
 
 
 class EditorialAgent(BaseAgent):
     """
     Editorial Agent: Autonomous Multi-Turn Local LLM Editor that synthesizes,
     translates, strips promotions, and fact-checks spoken audio summaries.
+    Returns typed EditorialResult.
     """
 
     def __init__(self) -> None:
         super().__init__("EditorialAgent")
 
-    def run(self, context: AgentContext) -> dict[str, Any]:
+    def run(self, context: AgentContext, transcription: TranscriptionResult | None = None) -> EditorialResult:
         output_path = context.working_dir / "narration.json"
         script_path = context.working_dir / "summary.txt"
         cleaned_source_path = context.working_dir / "cleaned_source.txt"
-        transcript = context.state.get("transcript_data", {})
+
+        # Resolve transcript from typed DTO, context, or state
+        if transcription:
+            transcript = transcription.transcript_data
+        elif context.transcription_result:
+            transcript = context.transcription_result.transcript_data
+        else:
+            transcript = context.state.get("transcript_data", {})
 
         segments = transcript.get("segments", [])
         if not segments:
             raise ProcessingError("No speech segments available for editorial synthesis.")
 
-        chunks = _transcript_chunks(segments, maximum_characters=6000)
+        # 1. Semantic Chunking respecting natural speech pauses & sentence endings
+        chunks = semantic_transcript_chunks(segments, target_characters=4000, maximum_characters=6000)
 
-        # 1. Check verified cached narration
+        # 2. Check verified cached narration
         if output_path.exists():
             try:
                 cached = json.loads(output_path.read_text(encoding="utf-8"))
                 if _is_narration_complete(cached, len(chunks)):
                     self.log(context, f"Verified complete summary found on disk ({len(chunks)} sections).")
                     script_path.write_text(cached["script"], encoding="utf-8")
-                    return {
-                        "narration_path": output_path,
-                        "summary_path": script_path,
-                        "script": cached["script"],
-                        "target_language": cached.get("target_language", "English"),
-                        "critic_score": cached.get("critic_score", 9.0),
-                    }
+                    result = EditorialResult(
+                        narration_path=output_path,
+                        summary_path=script_path,
+                        script=cached["script"],
+                        target_language=cached.get("target_language", "English"),
+                        critic_score=cached.get("critic_score", 9.0),
+                    )
+                    context.editorial_result = result
+                    return result
                 else:
-                    self.log(context, "Cached summary is incomplete. Re-synthesizing...")
-                    output_path.unlink()
-            except Exception:
-                pass
+                    StorageManager.safe_delete(output_path)
+            except Exception as exc:
+                logger.debug(f"Cache check error: {exc}")
+                StorageManager.safe_delete(output_path)
 
-        # 2. Ensure Ollama daemon is active
+        # 3. Ensure Ollama daemon is active
         if not ensure_ollama_running(context.settings):
             raise ProcessingError(f"Ollama server is unreachable at {context.settings.ollama_base_url}")
 
@@ -76,7 +92,7 @@ class EditorialAgent(BaseAgent):
 
             chunk_res = _prepare_chunk(context.settings, context.video, source_language, target_language, chunk)
 
-            # 3. Autonomous Critic Valuation Loop
+            # Autonomous Critic Valuation Loop
             source_text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in chunk)
             draft_script = chunk_res.get("script", "")
             eval_res = judge_summary(context.settings, source_text, draft_script, target_language, context.video.mode)
@@ -125,10 +141,12 @@ class EditorialAgent(BaseAgent):
 
         self.log(context, f"Editorial Synthesis complete! [Average Critic Score: {avg_critic_score}/10]")
 
-        return {
-            "narration_path": output_path,
-            "summary_path": script_path,
-            "script": final_script,
-            "target_language": target_language,
-            "critic_score": avg_critic_score,
-        }
+        result = EditorialResult(
+            narration_path=output_path,
+            summary_path=script_path,
+            script=final_script,
+            target_language=target_language,
+            critic_score=avg_critic_score,
+        )
+        context.editorial_result = result
+        return result
