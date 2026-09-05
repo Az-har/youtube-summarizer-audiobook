@@ -81,7 +81,7 @@ class TranscriptionAgent(BaseAgent):
         # 2. Silero VAD Neural Pre-check
         try:
             from src.vad import apply_silero_vad
-            vad_segments = apply_silero_vad(wav_path, context.settings.root)
+            vad_segments = apply_silero_vad(wav_path, context.settings.root / "models")
             if vad_segments:
                 self.log(context, f"Silero VAD verified {len(vad_segments)} active speech segments.")
         except Exception as vad_exc:

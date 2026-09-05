@@ -46,6 +46,7 @@ def load_settings(root: Path) -> Settings:
         youtube_privacy_status=env("YOUTUBE_PRIVACY_STATUS", "unlisted"),
         youtube_client_secret_file=env("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json"),
         ytmusic_auth_file=env("YTMUSIC_AUTH_FILE", "oauth.json"),
+        clean_intermediates=env("CLEAN_INTERMEDIATES", "false").lower() in ("true", "1", "yes"),
     )
 
 
