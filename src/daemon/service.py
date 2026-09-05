@@ -96,14 +96,30 @@ class DaemonService:
                     self.queue.update_status(task.task_id, "FAILED", "Local file no longer exists")
                     return
 
+                from src.processing import _get_audio_duration
+                duration = 0.0
+                try:
+                    duration = _get_audio_duration(file_path)
+                except Exception:
+                    duration = 0.0
+
                 vid = Video(
                     video_id=f"local_{file_path.stem[:32]}",
                     title=file_path.stem,
                     url=str(file_path),
+                    duration_seconds=duration,
+                    raw={"path": str(file_path), "type": "local"},
                 )
                 res = process_video_agentic(self.settings, vid)
-                self.queue.update_status(task.task_id, "COMPLETED")
-                self.logger.info(f"Completed local media task: {task.task_id}")
+                if res.status == "completed":
+                    from src.history import append_completed
+                    append_completed(self.settings.completed_file, vid.video_id)
+                    self.queue.update_status(task.task_id, "COMPLETED")
+                    self.logger.info(f"Completed local media task: {task.task_id}")
+                else:
+                    msg = f"Local media failed QA quality check ({res.status})"
+                    self.queue.update_status(task.task_id, "FAILED", msg)
+                    self.logger.warning(f"Task {task.task_id} failed: {msg}")
 
             elif task.source_type == "youtube":
                 videos = get_videos_from_url(task.target, self.settings.ytdlp_binary)
@@ -113,6 +129,9 @@ class DaemonService:
 
                 from src.history import completed_ids, append_completed
                 completed = completed_ids(self.settings.completed_file)
+                all_succeeded = True
+                failure_reasons = []
+
                 for index, video in enumerate(videos, start=1):
                     if video.video_id in completed:
                         self.logger.info(f"Skipping already-completed YouTube video: {video.video_id}")
@@ -121,9 +140,17 @@ class DaemonService:
                     res = process_video_agentic(self.settings, video)
                     if res.status == "completed":
                         append_completed(self.settings.completed_file, video.video_id)
+                    else:
+                        all_succeeded = False
+                        failure_reasons.append(f"{video.video_id}: {res.status}")
 
-                self.queue.update_status(task.task_id, "COMPLETED")
-                self.logger.info(f"Completed YouTube task: {task.task_id}")
+                if all_succeeded:
+                    self.queue.update_status(task.task_id, "COMPLETED")
+                    self.logger.info(f"Completed YouTube task: {task.task_id}")
+                else:
+                    err_summary = f"Partial failure: {', '.join(failure_reasons)}"
+                    self.queue.update_status(task.task_id, "FAILED", err_summary)
+                    self.logger.warning(f"Task {task.task_id} finished with errors: {err_summary}")
 
         except Exception as exc:
             self.logger.error(f"Task {task.task_id} failed: {exc}", exc_info=True)

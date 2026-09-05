@@ -38,43 +38,56 @@ class IngestionAgent(BaseAgent):
         # 2. Extract Thumbnail & Chapters for Audiobook Packaging
         thumbnail_path = context.working_dir / "thumbnail.jpg"
         if not thumbnail_path.exists():
-            thumb_url = f"https://i.ytimg.com/vi/{context.video.video_id}/maxresdefault.jpg"
-            try:
-                import urllib.request
-                urllib.request.urlretrieve(thumb_url, str(thumbnail_path))
-            except Exception as exc:
-                logger.debug(f"Maxres thumbnail unavailable ({exc}), trying HQ fallback...")
+            if not context.video.video_id.startswith("local_"):
+                thumb_url = f"https://i.ytimg.com/vi/{context.video.video_id}/maxresdefault.jpg"
                 try:
-                    fallback_url = f"https://i.ytimg.com/vi/{context.video.video_id}/hqdefault.jpg"
-                    urllib.request.urlretrieve(fallback_url, str(thumbnail_path))
-                except Exception as fallback_exc:
-                    logger.debug(f"Thumbnail download failed: {fallback_exc}")
+                    import urllib.request
+                    urllib.request.urlretrieve(thumb_url, str(thumbnail_path))
+                except Exception as exc:
+                    logger.debug(f"Maxres thumbnail unavailable ({exc}), trying HQ fallback...")
+                    try:
+                        fallback_url = f"https://i.ytimg.com/vi/{context.video.video_id}/hqdefault.jpg"
+                        urllib.request.urlretrieve(fallback_url, str(thumbnail_path))
+                    except Exception as fallback_exc:
+                        logger.debug(f"Thumbnail download failed: {fallback_exc}")
+            else:
+                # For local video files, extract a representative video frame using FFmpeg
+                video_exts = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+                if audio_path.suffix.lower() in video_exts:
+                    try:
+                        ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
+                        subprocess.run(
+                            [ffmpeg_bin, "-y", "-ss", "00:00:05", "-i", str(audio_path), "-vframes", "1", "-q:v", "2", str(thumbnail_path)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=15
+                        )
+                    except Exception as frame_exc:
+                        logger.debug("Local video frame extraction skipped: %s", frame_exc)
 
         chapters = context.video.raw.get("chapters", [])
         if chapters:
             self.log(context, f"Extracted {len(chapters)} chapter markers from source video.")
 
-        # 3. Audio Preprocessing (Loudness Normalization + Silence Trimming to 16kHz WAV)
+        # 3. Audio Preprocessing (Loudness Normalization to 16kHz WAV without silence stripping)
         ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
         wav_16k_path = context.working_dir / f"{context.video.video_id}_16k.wav"
 
         if wav_16k_path.exists() and wav_16k_path.stat().st_size > 1024:
             self.log(context, f"Reusing verified 16kHz audio on disk ({wav_16k_path.stat().st_size // 1024} KB).")
         else:
-            self.log(context, "Preprocessing audio (loudnorm + silence reduction) for AMD GPU...")
+            self.log(context, "Preprocessing audio (EBU R128 loudnorm standard) for Whisper...")
             cmd = [
                 ffmpeg_bin, "-y", "-i", str(audio_path),
-                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-40dB",
+                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true",
                 "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_16k_path)
             ]
             try:
-                subprocess.run(cmd, capture_output=True, check=True, timeout=600)
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=600)
             except Exception as exc:
                 self.log(context, f"Warning: Advanced preprocessing failed ({exc}), falling back to direct 16k conversion.")
                 subprocess.run([
                     ffmpeg_bin, "-y", "-i", str(audio_path),
                     "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-vn", str(wav_16k_path)
-                ], capture_output=True, check=True)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
         result = IngestionResult(
             audio_path=audio_path,

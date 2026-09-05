@@ -41,7 +41,7 @@ def render_podcast_video(
         "-shortest",
         str(output_video_path),
     ]
-    subprocess.run(cmd, capture_output=True, check=True, timeout=600)
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=600)
     return output_video_path
 
 
@@ -60,7 +60,8 @@ def get_authenticated_youtube_service(settings: Settings, client_secret_path: Pa
     if token_path.exists():
         try:
             creds = Credentials.from_authorized_user_file(str(token_path), scopes)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to load credentials from %s: %s", token_path, exc)
             creds = None
 
     if not creds or not creds.valid:

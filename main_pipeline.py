@@ -55,9 +55,17 @@ def main() -> int:
         action="store_true",
         help="Enable overlapped concurrency for batch processing (downloads next video while processing current)",
     )
+    parser.add_argument(
+        "--clean-intermediates",
+        action="store_true",
+        help="Automatically delete uncompressed 16kHz WAV and source audio files after final media export",
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
     settings = load_settings(root)
+    if args.clean_intermediates:
+        from dataclasses import replace
+        settings = replace(settings, clean_intermediates=True)
 
     try:
         if args.test_tts:

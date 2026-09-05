@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import email.utils
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from xml.sax.saxutils import escape
 
 from src.models import Settings, Video
 from src.publishers.base import BasePodcastPublisher
+
+logger = logging.getLogger("RSSPublisher")
 
 
 class RSSPodcastPublisher(BasePodcastPublisher):
@@ -28,7 +31,8 @@ class RSSPodcastPublisher(BasePodcastPublisher):
         if self.episodes_file.exists():
             try:
                 return json.loads(self.episodes_file.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to parse podcast episodes from %s: %s", self.episodes_file, exc)
                 return []
         return []
 

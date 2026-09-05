@@ -74,7 +74,7 @@ class AudiobookAgent(BaseAgent):
                 "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-45dB",
                 "-c:a", "libmp3lame", "-b:a", "192k", str(mastered_audio)
             ]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=120)
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
             if mastered_audio.exists() and mastered_audio.stat().st_size > 1024:
                 mastered_audio.replace(output_audio)
                 self.log(context, "Audiobook mastered successfully (192kbps MP3).")

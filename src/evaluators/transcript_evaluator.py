@@ -4,16 +4,15 @@ from pathlib import Path
 from src.models import EvaluationResult
 
 
-def _calculate_ngram_repetition_rate(text: str, n: int = 4) -> float:
-    """Computes the ratio of repeated n-grams in text."""
-    words = text.lower().split()
-    if len(words) < n:
+def _calculate_ngram_repetition_rate(words: list[str] | str, n: int = 4) -> float:
+    """Computes the ratio of repeated n-grams in text or token list."""
+    if isinstance(words, str):
+        words = words.lower().split()
+    total_ngrams = len(words) - n + 1
+    if total_ngrams <= 0:
         return 0.0
-    ngrams = [tuple(words[i:i + n]) for i in range(len(words) - n + 1)]
-    if not ngrams:
-        return 0.0
-    unique_count = len(set(ngrams))
-    return 1.0 - (unique_count / len(ngrams))
+    unique_count = len({tuple(words[i:i + n]) for i in range(total_ngrams)})
+    return 1.0 - (unique_count / total_ngrams)
 
 
 def audit_transcript(transcript_data: dict, audio_duration: float = 0.0) -> EvaluationResult:
@@ -38,8 +37,9 @@ def audit_transcript(transcript_data: dict, audio_duration: float = 0.0) -> Eval
     segment_count = len(segments)
     metrics["segment_count"] = segment_count
 
-    all_text = " ".join(s.get("text", "").strip() for s in segments)
-    total_words = len(all_text.split())
+    # Pre-tokenize all segment words once to avoid repeated string splitting and memory thrashing
+    words = [w.lower() for s in segments for w in s.get("text", "").split()]
+    total_words = len(words)
     metrics["word_count"] = total_words
 
     # 1. Coverage Check
@@ -66,9 +66,9 @@ def audit_transcript(transcript_data: dict, audio_duration: float = 0.0) -> Eval
             score -= 3.0
             issues.append(f"Abnormally high speech density: {wpm:.1f} WPM (possible text explosion / hallucination).")
 
-    # 3. Looping Hallucination Check
-    rep_rate_4gram = _calculate_ngram_repetition_rate(all_text, n=4)
-    rep_rate_6gram = _calculate_ngram_repetition_rate(all_text, n=6)
+    # 3. Looping Hallucination Check using pre-tokenized words
+    rep_rate_4gram = _calculate_ngram_repetition_rate(words, n=4)
+    rep_rate_6gram = _calculate_ngram_repetition_rate(words, n=6)
     metrics["repetition_rate_4gram"] = round(rep_rate_4gram, 3)
     metrics["repetition_rate_6gram"] = round(rep_rate_6gram, 3)
 

@@ -1,56 +1,31 @@
 import json
+import logging
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from src.models import EvaluationResult, Settings, Video
 
+logger = logging.getLogger("SummaryEvaluator")
+
 
 def _extract_json(raw: str) -> dict:
-    """Extracts JSON object from raw LLM output, handling markdown code fences."""
+    """Extracts JSON object from raw LLM output, using OllamaClient with graceful fallback."""
     if not raw:
         return {}
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-    if "{" in text and "}" in text:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        try:
-            return json.loads(text[start:end])
-        except Exception:
-            pass
+    from src.processing import OllamaClient
     try:
-        return json.loads(text)
-    except Exception:
+        return OllamaClient.extract_json(raw)
+    except Exception as exc:
+        logger.debug("Failed to extract JSON from LLM text (%s), returning empty dict.", exc)
         return {}
 
 
 def _call_critic_ollama(settings: Settings, prompt: str) -> dict:
-    payload = {
-        "model": settings.ollama_model,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        "options": {
-            "num_ctx": 4096,
-            "temperature": 0.1,  # Low temperature for strict, reliable valuation
-            "top_p": 0.9,
-        },
-    }
-    req = urllib.request.Request(
-        f"{settings.ollama_base_url}/api/generate",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    from src.processing import OllamaClient
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return _extract_json(body.get("response", "{}"))
-    except Exception:
+        return OllamaClient.generate_json(settings.ollama_base_url, settings.ollama_model, prompt)
+    except Exception as exc:
+        logger.warning("Critic Ollama evaluation call failed: %s", exc)
         return {}
 
 

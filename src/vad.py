@@ -62,16 +62,20 @@ def apply_silero_vad(
         is_speech = False
         speech_start = 0.0
 
+        sr_tensor = np.array(16000, dtype=np.int64)
+        ort_inputs = {
+            "input": None,
+            "sr": sr_tensor,
+            "h": h,
+            "c": c,
+        }
+
         for i in range(0, len(audio) - window_size_samples, window_size_samples):
             chunk = audio[i : i + window_size_samples][np.newaxis, :]
-            sr_tensor = np.array(16000, dtype=np.int64)
+            ort_inputs["input"] = chunk
+            ort_inputs["h"] = h
+            ort_inputs["c"] = c
 
-            ort_inputs = {
-                "input": chunk,
-                "sr": sr_tensor,
-                "h": h,
-                "c": c,
-            }
             ort_outs = session.run(None, ort_inputs)
             out_prob = float(ort_outs[0][0][0])
             h, c = ort_outs[1], ort_outs[2]

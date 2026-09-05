@@ -139,3 +139,25 @@ class StorageManager:
             "transcript_path": dest_trans,
             "report_path": str(report_file),
         }
+
+    @staticmethod
+    def clean_intermediate_artifacts(working_dir: Path) -> list[str]:
+        """
+        Cleans bulky intermediate files (*_16k.wav, source_audio.*) in the working directory
+        to prevent disk exhaustion after final media export. Preserves json manifests and text summaries.
+        """
+        removed: list[str] = []
+        if not working_dir.exists():
+            return removed
+
+        # Clean uncompressed 16kHz WAV files (~115 MB/hour)
+        for wav_file in working_dir.glob("*_16k.wav"):
+            if StorageManager.safe_delete(wav_file):
+                removed.append(wav_file.name)
+
+        # Clean downloaded source audio within the working directory
+        for src_audio in working_dir.glob("source_audio.*"):
+            if StorageManager.safe_delete(src_audio):
+                removed.append(src_audio.name)
+
+        return removed

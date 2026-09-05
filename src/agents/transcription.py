@@ -78,7 +78,16 @@ class TranscriptionAgent(BaseAgent):
             context.transcription_result = result
             return result
 
-        # 2. Locate Whisper CLI Engine (Cross-platform)
+        # 2. Silero VAD Neural Pre-check
+        try:
+            from src.vad import apply_silero_vad
+            vad_segments = apply_silero_vad(wav_path, context.settings.root)
+            if vad_segments:
+                self.log(context, f"Silero VAD verified {len(vad_segments)} active speech segments.")
+        except Exception as vad_exc:
+            logger.debug("Silero VAD pre-pass skipped: %s", vad_exc)
+
+        # 3. Locate Whisper CLI Engine (Cross-platform)
         exe = _find_whisper_cli(context.settings.root)
         if not exe:
             # Fallback to faster-whisper (cross-platform CPU/GPU)
@@ -118,7 +127,7 @@ class TranscriptionAgent(BaseAgent):
         if not out_json_file.exists():
             raise ProcessingError(f"Whisper completed but output file not found: {out_json_file}")
 
-        # 3. Parse & Clean Segments
+        # 4. Parse & Clean Segments
         data = json.loads(out_json_file.read_text(encoding="utf-8", errors="replace"))
         transcription_list = data.get("transcription", [])
         segment_data = []
@@ -135,10 +144,11 @@ class TranscriptionAgent(BaseAgent):
                 "start": start,
                 "end": end,
                 "text": text,
+                "_cleaned": True,
                 "avg_logprob": 0.0,
             })
 
-        # 4. Anti-loop segment deduplication
+        # 5. Anti-loop segment deduplication
         segment_data = deduplicate_segments(segment_data, max_consecutive_repeats=2)
 
         detected_lang = data.get("result", {}).get("language", "en")
@@ -208,6 +218,7 @@ class TranscriptionAgent(BaseAgent):
                     "start": s.start,
                     "end": s.end,
                     "text": text,
+                    "_cleaned": True,
                     "avg_logprob": getattr(s, "avg_logprob", 0.0),
                 })
 

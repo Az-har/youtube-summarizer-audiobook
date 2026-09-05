@@ -13,6 +13,11 @@ def process_video(settings: Settings, video: Video) -> ProcessResult:
     return process_video_agentic(settings, video)
 
 
+import logging
+
+logger = logging.getLogger("Pipeline")
+
+
 def _pre_ingest_video(settings: Settings, video: Video) -> None:
     """Helper for pre-fetching and normalizing next video in the pipeline."""
     try:
@@ -23,8 +28,8 @@ def _pre_ingest_video(settings: Settings, video: Video) -> None:
         context = AgentContext(settings=settings, video=video, working_dir=working_dir)
         agent = IngestionAgent()
         agent.run(context)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Pre-ingestion for video %s failed or cancelled: %s", video.video_id, exc)
 
 
 def process_url(settings: Settings, url: str, dry_run: bool = False, concurrent: bool = False) -> list[ProcessResult]:

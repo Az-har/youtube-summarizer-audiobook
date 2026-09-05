@@ -34,7 +34,6 @@ class EditorialAgent(BaseAgent):
     def run(self, context: AgentContext, transcription: TranscriptionResult | None = None) -> EditorialResult:
         output_path = context.working_dir / "narration.json"
         script_path = context.working_dir / "summary.txt"
-        cleaned_source_path = context.working_dir / "cleaned_source.txt"
 
         # Resolve transcript from typed DTO, context, or state
         if transcription:
@@ -75,7 +74,10 @@ class EditorialAgent(BaseAgent):
 
         # 3. Ensure Ollama daemon is active
         if not ensure_ollama_running(context.settings):
-            raise ProcessingError(f"Ollama server is unreachable at {context.settings.ollama_base_url}")
+            raise ProcessingError(
+                f"Ollama server is not reachable at {context.settings.ollama_base_url}. "
+                "Please ensure Ollama is installed and running."
+            )
 
         target_language = "Tamil" if transcript.get("language", "").lower().startswith("ta") else "English"
         source_language = transcript.get("language", "unknown")
@@ -137,7 +139,6 @@ class EditorialAgent(BaseAgent):
 
         output_path.write_text(json.dumps(prepared, indent=2, ensure_ascii=False), encoding="utf-8")
         script_path.write_text(final_script, encoding="utf-8")
-        cleaned_source_path.write_text(final_script, encoding="utf-8")
 
         self.log(context, f"Editorial Synthesis complete! [Average Critic Score: {avg_critic_score}/10]")
 

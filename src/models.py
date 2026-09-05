@@ -45,6 +45,7 @@ class Settings:
     youtube_privacy_status: str = "unlisted"
     youtube_client_secret_file: str = "client_secret.json"
     ytmusic_auth_file: str = "oauth.json"
+    clean_intermediates: bool = False
 
 
 @dataclass

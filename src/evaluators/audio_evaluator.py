@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 import subprocess
+import sys
 from pathlib import Path
 
 from src.models import EvaluationResult, Settings
+
+logger = logging.getLogger("AudioEvaluator")
 
 
 def audit_audio(
@@ -66,8 +70,9 @@ def audit_audio(
     # 3. Audio volume & silence check via FFmpeg
     ffmpeg_bin = _find_ffmpeg(settings.ffmpeg_binary)
     try:
+        null_target = "NUL" if sys.platform == "win32" else "/dev/null"
         proc = subprocess.run(
-            [ffmpeg_bin, "-i", str(audio_path), "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "NUL"],
+            [ffmpeg_bin, "-i", str(audio_path), "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", null_target],
             capture_output=True, text=True, timeout=15
         )
         output = proc.stderr or ""
@@ -80,10 +85,10 @@ def audit_audio(
                     if max_vol < -35.0:
                         score -= 3.0
                         issues.append(f"Audio is nearly inaudible (max volume: {max_vol:.1f} dB).")
-                except ValueError:
-                    pass
-    except Exception:
-        pass
+                except ValueError as val_err:
+                    logger.debug("Failed parsing max_volume value '%s': %s", max_vol_str, val_err)
+    except Exception as exc:
+        logger.warning("FFmpeg volumedetect analysis failed on %s: %s", audio_path, exc)
 
     final_score = max(0.0, min(10.0, round(score, 1)))
     status = "FAIL" if final_score < 5.0 else ("WARN" if final_score < 8.0 else "PASS")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -132,7 +133,7 @@ class TaskQueue:
 
     def enqueue(self, target: str, source_type: str) -> Task | None:
         """Enqueues a target if not already tracked or completed."""
-        task_id = str(abs(hash(target)) % 100000000)
+        task_id = hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
         now = time.time()
 
         with self._get_connection() as conn:

@@ -130,6 +130,45 @@ class ArchitecturalRefinementsTests(unittest.TestCase):
         self.assertTrue(Path(exported["summary_path"]).exists())
         self.assertTrue(Path(exported["report_path"]).exists())
 
+    def test_deterministic_task_id_sha256(self):
+        import hashlib
+        from src.daemon.queue import TaskQueue
+        target = "https://youtube.com/watch?v=determinism_test"
+        expected_id = hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
+
+        queue1 = TaskQueue(self.root / "q1.json")
+        task1 = queue1.enqueue(target, "youtube")
+        self.assertEqual(task1.task_id, expected_id)
+
+        # A brand new queue instance with new DB must produce the exact same ID
+        queue2 = TaskQueue(self.root / "q2.json")
+        task2 = queue2.enqueue(target, "youtube")
+        self.assertEqual(task2.task_id, expected_id)
+
+    def test_clean_intermediate_artifacts(self):
+        w_dir = self.root / "working_media"
+        w_dir.mkdir(parents=True, exist_ok=True)
+        wav_file = w_dir / "vid1_16k.wav"
+        src_file = w_dir / "source_audio.mp4"
+        summary_file = w_dir / "summary.txt"
+
+        wav_file.write_bytes(b"wav content" * 100)
+        src_file.write_bytes(b"mp4 content" * 100)
+        summary_file.write_text("Preserved summary", encoding="utf-8")
+
+        removed = StorageManager.clean_intermediate_artifacts(w_dir)
+        self.assertIn("vid1_16k.wav", removed)
+        self.assertIn("source_audio.mp4", removed)
+        self.assertFalse(wav_file.exists())
+        self.assertFalse(src_file.exists())
+        self.assertTrue(summary_file.exists())
+
+    def test_ngram_calculation_with_pretokenized_words(self):
+        from src.evaluators.transcript_evaluator import _calculate_ngram_repetition_rate
+        tokens = ["repeat", "phrase", "here", "now", "repeat", "phrase", "here", "now"]
+        rate = _calculate_ngram_repetition_rate(tokens, n=4)
+        self.assertGreater(rate, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

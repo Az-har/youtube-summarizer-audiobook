@@ -1,5 +1,12 @@
 import re
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+# Pre-compiled module-level regular expressions for high-throughput text cleaning
+RE_STUTTER = re.compile(r'\b(\w+)(?:\s+\1\b)+', flags=re.IGNORECASE)
+RE_BRACKET_NOISE = re.compile(r'\[(music|applause|laughter|silence|cheering|noise|no audio)\]', flags=re.IGNORECASE)
+RE_PAREN_NOISE = re.compile(r'\((music|applause|laughter|silence|cheering|noise)\)', flags=re.IGNORECASE)
+RE_MULTI_WHITESPACE = re.compile(r'\s+')
+RE_NORMALIZE = re.compile(r'[^\w\s]')
 
 
 def remove_repeated_words(text: str) -> str:
@@ -7,19 +14,19 @@ def remove_repeated_words(text: str) -> str:
     Removes consecutive repeated words / stutters.
     Example: 'yes yes yes I think' -> 'yes I think'
     """
-    pattern = r'\b(\w+)(?:\s+\1\b)+'
-    return re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
+    return RE_STUTTER.sub(r'\1', text)
 
 
 def remove_repeated_phrases(text: str, max_phrase_len: int = 32) -> str:
     """
     Removes repeated consecutive phrases that Whisper produces on music/silence/noise loops.
-    Handles short stutters up to long looping sentences (up to 32 words).
+    Handles short stutters up to long looping sentences (up to 32 words) with O(N * L) tuple comparison.
     """
     words = text.split()
     if len(words) < 4:
         return text
 
+    words_lower = tuple(w.lower() for w in words)
     cleaned: list[str] = []
     i = 0
     limit = min(max_phrase_len, len(words) // 2)
@@ -29,13 +36,13 @@ def remove_repeated_phrases(text: str, max_phrase_len: int = 32) -> str:
         # Check phrase lengths from limit down to 2 words
         for p_len in range(limit, 1, -1):
             if i + 2 * p_len <= len(words):
-                phrase1 = [w.lower() for w in words[i : i + p_len]]
-                phrase2 = [w.lower() for w in words[i + p_len : i + 2 * p_len]]
+                phrase1 = words_lower[i : i + p_len]
+                phrase2 = words_lower[i + p_len : i + 2 * p_len]
                 if phrase1 == phrase2:
                     cleaned.extend(words[i : i + p_len])
                     i += 2 * p_len
                     # Skip any further identical repeats
-                    while i + p_len <= len(words) and [w.lower() for w in words[i : i + p_len]] == phrase1:
+                    while i + p_len <= len(words) and words_lower[i : i + p_len] == phrase1:
                         i += p_len
                     found_repeat = True
                     break
@@ -52,20 +59,18 @@ def clean_transcript_text(text: str) -> str:
     """
     if not text:
         return ""
-    # Strip common Whisper non-speech noise tags
-    text = re.sub(r'\[(music|applause|laughter|silence|cheering|noise|no audio)\]', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\((music|applause|laughter|silence|cheering|noise)\)', '', text, flags=re.IGNORECASE)
+    text = RE_BRACKET_NOISE.sub('', text)
+    text = RE_PAREN_NOISE.sub('', text)
     text = remove_repeated_words(text)
     text = remove_repeated_phrases(text, max_phrase_len=32)
-    text = re.sub(r'\s+', ' ', text)
+    text = RE_MULTI_WHITESPACE.sub(' ', text)
     return text.strip()
 
 
 def deduplicate_segments(segments: List[Dict[str, Any]], max_consecutive_repeats: int = 2) -> List[Dict[str, Any]]:
     """
     Filters out runaway consecutive repeating segments produced by Whisper hallucinations.
-    If the same or near-identical text repeats more than `max_consecutive_repeats` times,
-    further duplicates are discarded.
+    Avoids re-cleaning already processed text.
     """
     if not segments:
         return []
@@ -76,11 +81,11 @@ def deduplicate_segments(segments: List[Dict[str, Any]], max_consecutive_repeats
 
     for seg in segments:
         raw_text = seg.get("text", "").strip()
-        cleaned = clean_transcript_text(raw_text)
+        cleaned = raw_text if seg.get("_cleaned") else clean_transcript_text(raw_text)
         if not cleaned:
             continue
 
-        normalized = re.sub(r'[^\w\s]', '', cleaned.lower())
+        normalized = RE_NORMALIZE.sub('', cleaned.lower())
         if normalized == last_normalized:
             repeat_count += 1
             if repeat_count > max_consecutive_repeats:
@@ -91,6 +96,7 @@ def deduplicate_segments(segments: List[Dict[str, Any]], max_consecutive_repeats
 
         seg_copy = dict(seg)
         seg_copy["text"] = cleaned
+        seg_copy["_cleaned"] = True
         deduped.append(seg_copy)
 
     return deduped
@@ -99,7 +105,7 @@ def deduplicate_segments(segments: List[Dict[str, Any]], max_consecutive_repeats
 def format_paragraphs(segments: List[Dict[str, Any]], pause_threshold: float = 1.5) -> str:
     """
     Groups segment lines into structured paragraphs based on natural pause duration (gap > pause_threshold).
-    Includes timestamps at the start of each paragraph.
+    Includes timestamps at the start of each paragraph. Avoids redundant re-cleaning.
     """
     if not segments:
         return ""
@@ -113,7 +119,7 @@ def format_paragraphs(segments: List[Dict[str, Any]], pause_threshold: float = 1
         start = float(seg.get("start", 0.0))
         end = float(seg.get("end", 0.0))
         raw_text = seg.get("text", "").strip()
-        text = clean_transcript_text(raw_text)
+        text = raw_text if seg.get("_cleaned") else clean_transcript_text(raw_text)
 
         if not text:
             continue

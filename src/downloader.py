@@ -95,36 +95,42 @@ def get_local_media_videos(input_dir: Path) -> list[Video]:
     valid_exts = {".mp3", ".wav", ".m4a", ".mp4", ".mkv", ".webm", ".flac", ".aac", ".ogg"}
     media_files = [f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
     
+    from src.processing import _get_audio_duration
+
     videos: list[Video] = []
     for f in sorted(media_files):
         # Sanitize video_id for folder names
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in f.stem)
         vid_id = f"local_{safe_id}"
+        duration = 0.0
+        try:
+            duration = _get_audio_duration(f)
+        except Exception:
+            duration = 0.0
+
         videos.append(Video(
             video_id=vid_id,
             title=f.stem,
             url=str(f.resolve()),
             channel_title="Local Media",
-            duration_seconds=0,
+            duration_seconds=duration,
             raw={"path": str(f.resolve()), "type": "local"},
         ))
     return videos
 
 
 def download_audio(video: Video, output_dir: Path, ytdlp_binary: str = "yt-dlp") -> Path:
-    """Download the audio stream for a given video, or copy local media file."""
+    """Download the audio stream for a given video, or point directly to local media."""
     output_dir.mkdir(parents=True, exist_ok=True)
     existing = next(output_dir.glob("source_audio.*"), None)
     if existing and existing.stat().st_size > 0:
         return existing
 
-    # Handle local media file
+    # Handle local media file without duplicating multi-gigabyte binaries
     if video.raw.get("type") == "local" or (Path(video.url).is_file() and not video.url.startswith("http")):
         src_file = Path(video.url)
-        dest_file = output_dir / f"source_audio{src_file.suffix}"
-        if not dest_file.exists():
-            shutil.copy2(src_file, dest_file)
-        return dest_file
+        if src_file.exists():
+            return src_file
 
     output_template = str(output_dir / "source_audio.%(ext)s")
     cmd = _get_ytdlp_cmd(ytdlp_binary) + [

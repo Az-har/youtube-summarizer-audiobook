@@ -86,17 +86,36 @@ def _format_time(seconds: float) -> str:
     return f"{mins:02d}:{secs:02d}"
 
 
-def run_command(args: list[str], description: str) -> None:
-    """Memory-safe command runner keeping only recent output lines in case of error."""
+def run_command(args: list[str], description: str, timeout: float | None = None) -> None:
+    """
+    Memory-safe subprocess executor streaming stderr line-by-line and keeping
+    only a bounded rolling buffer of recent lines in case of error.
+    """
+    from collections import deque
     try:
-        completed = subprocess.run(args, check=True, text=True, capture_output=True)
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            bufsize=1,
+        )
+        stderr_tail = deque(maxlen=30)
+        if proc.stderr:
+            for line in proc.stderr:
+                stderr_tail.append(line)
+        returncode = proc.wait(timeout=timeout)
+        if returncode != 0:
+            err_msg = "".join(stderr_tail).strip()
+            raise ProcessingError(f"{description} failed with exit code {returncode}: {err_msg[-1200:]}")
     except FileNotFoundError as exc:
         raise ProcessingError(f"{description} executable was not found: {args[0]}") from exc
-    except subprocess.CalledProcessError as exc:
-        message = (exc.stderr or exc.stdout or "").strip()
-        raise ProcessingError(f"{description} failed: {message[-1200:]}") from exc
-    if completed.returncode:
-        raise ProcessingError(f"{description} failed with exit code {completed.returncode}")
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        raise ProcessingError(f"{description} timed out after {timeout}s") from exc
+    except subprocess.SubprocessError as exc:
+        raise ProcessingError(f"{description} process execution failed: {exc}") from exc
 
 
 def _find_ffmpeg(configured: str = "ffmpeg") -> str:
@@ -223,41 +242,73 @@ class OllamaClient:
 
     @classmethod
     def generate_json(cls, base_url: str, model: str, prompt: str, max_retries: int = 2) -> dict[str, Any]:
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": True,
-            "format": "json",
-            "options": {
-                "num_ctx": 4096,
-                "temperature": 0.2,
-                "top_p": 0.9,
-                "top_k": 40,
-            },
-        }
-        url = f"{base_url}/api/generate"
-        data = json.dumps(payload).encode("utf-8")
+        has_ollama = False
+        client = None
+        try:
+            import ollama
+            client = ollama.Client(host=base_url)
+            has_ollama = True
+        except ImportError:
+            has_ollama = False
 
         for attempt in range(1, max_retries + 1):
             accumulated = []
             try:
-                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-                with urllib.request.urlopen(req, timeout=300) as resp:
-                    for line in resp:
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line.decode("utf-8"))
-                            token = chunk.get("response", "")
-                            accumulated.append(token)
+                if has_ollama and client is not None:
+                    response = client.generate(
+                        model=model,
+                        prompt=prompt,
+                        stream=True,
+                        format="json",
+                        options={
+                            "num_ctx": 4096,
+                            "temperature": 0.2,
+                            "top_p": 0.9,
+                            "top_k": 40,
+                        },
+                    )
+                    for chunk in response:
+                        if "response" in chunk:
+                            accumulated.append(chunk["response"])
                             if len(accumulated) % 25 == 0:
                                 print(".", end="", flush=True)
-                        except Exception as parse_err:
-                            logger.debug(f"Chunk decode warning: {parse_err}")
+                else:
+                    payload = json.dumps({
+                        "model": model,
+                        "prompt": prompt,
+                        "stream": True,
+                        "format": "json",
+                        "options": {
+                            "num_ctx": 4096,
+                            "temperature": 0.2,
+                            "top_p": 0.9,
+                            "top_k": 40,
+                        },
+                    }).encode("utf-8")
+                    req = urllib.request.Request(
+                        f"{base_url.rstrip('/')}/api/generate",
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        for line in resp:
+                            if not line:
+                                continue
+                            try:
+                                chunk_json = json.loads(line.decode("utf-8"))
+                                text_piece = chunk_json.get("response", "")
+                                if text_piece:
+                                    accumulated.append(text_piece)
+                                    if len(accumulated) % 25 == 0:
+                                        print(".", end="", flush=True)
+                            except json.JSONDecodeError:
+                                pass
+
                 print(" [OK]", flush=True)
                 full_text = "".join(accumulated)
                 return cls.extract_json(full_text)
-            except (urllib.error.URLError, TimeoutError) as net_err:
+            except Exception as net_err:
                 logger.warning(f"Ollama connection attempt {attempt}/{max_retries} failed: {net_err}")
                 if attempt < max_retries:
                     time.sleep(2.0 * attempt)
@@ -374,77 +425,30 @@ def _is_narration_complete(narration_data: dict, expected_chunks_count: int) -> 
 
 
 def prepare_narration(settings: Settings, video: Video, transcript: dict, output_path: Path) -> dict:
-    from src.evaluators import judge_summary, refine_summary_with_critique
-
-    chunks = _transcript_chunks(transcript["segments"])
-    if not chunks:
-        raise ProcessingError("Whisper returned no speech segments")
-
-    cached_data = StorageManager.is_narration_cached(output_path, len(chunks))
-    if cached_data:
-        print(f"  Found verified complete summary on disk ({cached_data.get('chunk_count', len(chunks))} sections).")
-        return cached_data
-
+    """
+    Legacy wrapper delegating directly to EditorialAgent to consolidate all editorial logic.
+    """
     if not ensure_ollama_running(settings):
         raise ProcessingError(
             f"Ollama server is not reachable at {settings.ollama_base_url}. "
-            "Please ensure Ollama is installed and running (e.g. start Ollama app or run 'ollama serve')."
+            "Please ensure Ollama is installed and running."
         )
-    target_language = "Tamil" if transcript.get("language", "").lower().startswith("ta") else "English"
-    source_language = transcript.get("language", "unknown")
-    
-    print(f"  Summarizing & Self-Evaluating {len(chunks)} sections with {settings.ollama_model} ({target_language})...")
-    prepared_chunks = []
-    chunk_evaluations = []
 
-    for index, chunk in enumerate(chunks, start=1):
-        start_ts = _format_time(chunk[0]["start"])
-        end_ts = _format_time(chunk[-1]["end"])
-        print(f"    [{index}/{len(chunks)}] Section {start_ts} -> {end_ts} [Drafting", end="", flush=True)
+    from src.agents.base import AgentContext
+    from src.agents.editorial import EditorialAgent
+    from src.models import TranscriptionResult
 
-        source_chunk_text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in chunk)
-        chunk_result = _prepare_chunk(settings, video, source_language, target_language, chunk)
-        
-        # Self-Evaluating LLM Critic Pass
-        eval_result = judge_summary(
-            settings=settings,
-            source_chunk_text=source_chunk_text,
-            draft_script=chunk_result.get("script", ""),
-            target_language=target_language,
-            mode=video.mode,
-        )
-        chunk_evaluations.append(eval_result)
-        status_label = "PASS" if eval_result.status in ("PASS", "WARN") else "FAIL"
-        print(f" -> Critic Score: {eval_result.score:.1f}/10 ({status_label})]")
-
-        # Agent Self-Healing: If Critic failed the section, request an automated targeted revision
-        if eval_result.status == "FAIL":
-            print(f"      [Self-Healing] Refining section based on Critic feedback: {eval_result.issues}...", end="", flush=True)
-            chunk_result = refine_summary_with_critique(
-                settings=settings,
-                video=video,
-                source_language=source_language,
-                target_language=target_language,
-                source_text=source_chunk_text,
-                draft_script=chunk_result.get("script", ""),
-                critique_issues=eval_result.issues,
-            )
-            print(" [Refined OK]")
-
-        prepared_chunks.append(chunk_result)
-
-    final_script = "\n\n".join(chunk["script"].strip() for chunk in prepared_chunks if chunk.get("script"))
-    avg_critic_score = round(sum(e.score for e in chunk_evaluations) / max(len(chunk_evaluations), 1), 2)
-
-    payload = {
-        "target_language": target_language,
-        "script": final_script,
-        "chunks": prepared_chunks,
-        "chunk_count": len(chunks),
-        "critic_score": avg_critic_score,
-    }
-    output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return payload
+    working_dir = output_path.parent
+    working_dir.mkdir(parents=True, exist_ok=True)
+    context = AgentContext(settings=settings, video=video, working_dir=working_dir)
+    context.transcription_result = TranscriptionResult(
+        transcript_path=working_dir / "transcript.json",
+        txt_path=working_dir / "transcript.txt",
+        transcript_data=transcript,
+    )
+    agent = EditorialAgent()
+    res = agent.run(context)
+    return json.loads(res.narration_path.read_text(encoding="utf-8"))
 
 
 def synthesize(settings: Settings, script_path: Path, output_audio: Path, language: str) -> Path | None:
@@ -482,9 +486,6 @@ def synthesize(settings: Settings, script_path: Path, output_audio: Path, langua
 
             asyncio.run(_run_edge_tts())
             if output_audio.exists() and output_audio.stat().st_size > 1024:
-                from src.evaluators import audit_audio
-                audio_eval = audit_audio(output_audio, script_path, settings)
-                print(f"  Audio Guard Verdict: {audio_eval.status} [Score: {audio_eval.score}/10] ({audio_eval.metrics.get('wpm', 0)} WPM, {audio_eval.metrics.get('file_size_kb', 0)} KB).")
                 return output_audio
         except Exception as exc:
             logger.warning(f"edge-tts failed ({exc}), checking fallback command template...")
@@ -496,9 +497,6 @@ def synthesize(settings: Settings, script_path: Path, output_audio: Path, langua
         )
         run_command(shlex.split(command), "local TTS")
         if output_audio.exists() and output_audio.stat().st_size > 1024:
-            from src.evaluators import audit_audio
-            audio_eval = audit_audio(output_audio, script_path, settings)
-            print(f"  Audio Guard Verdict: {audio_eval.status} [Score: {audio_eval.score}/10] ({audio_eval.metrics.get('wpm', 0)} WPM).")
             return output_audio
 
     return None

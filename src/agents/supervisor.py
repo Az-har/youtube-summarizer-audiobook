@@ -130,6 +130,15 @@ class SupervisorAgent(BaseAgent):
         for st_name, st_res in scorecard.stages.items():
             print(f"    - {st_name.capitalize():<15} : {st_res.status} [Score: {st_res.score}/10]")
         print(f"  📁 Finished Media exported to: data/output/")
+
+        # -------------------------------------------------------------
+        # 7. Intermediate Artifact Cleanup Hook (Disk Retention Policy)
+        # -------------------------------------------------------------
+        if getattr(context.settings, "clean_intermediates", False):
+            cleaned = StorageManager.clean_intermediate_artifacts(context.working_dir)
+            if cleaned:
+                self.log(context, f"Cleaned {len(cleaned)} intermediate artifacts: {', '.join(cleaned)}")
+
         print("  " + "=" * 55)
 
         return {
