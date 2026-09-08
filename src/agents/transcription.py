@@ -15,6 +15,7 @@ from src.models import IngestionResult, TranscriptionResult
 from src.processing import ProcessingError, _get_ggml_model
 from src.storage import StorageManager
 from src.text_cleaner import clean_transcript_text, deduplicate_segments, format_paragraphs
+from src.vram_guard import VRAMGuard
 
 logger = logging.getLogger("TranscriptionAgent")
 
@@ -119,7 +120,8 @@ class TranscriptionAgent(BaseAgent):
             "--flash-attn"
         ]
 
-        proc = subprocess.run(cmd)
+        with VRAMGuard.guard("Whisper_Transcription"):
+            proc = subprocess.run(cmd)
         print("  " + "=" * 55)
         if proc.returncode != 0:
             raise ProcessingError(f"Whisper execution failed with exit code {proc.returncode}")
@@ -203,12 +205,13 @@ class TranscriptionAgent(BaseAgent):
             cpu_threads=threads,
         )
 
-        segments, info = model.transcribe(
-            str(wav_path),
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-            condition_on_previous_text=False,
-        )
+        with VRAMGuard.guard("Whisper_Transcription"):
+            segments, info = model.transcribe(
+                str(wav_path),
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500),
+                condition_on_previous_text=False,
+            )
 
         segment_data = []
         for s in segments:

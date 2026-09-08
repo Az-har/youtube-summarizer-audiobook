@@ -7,6 +7,56 @@ from src.models import EvaluationResult, Settings, Video
 
 logger = logging.getLogger("SummaryEvaluator")
 
+RE_NUMERICAL_ENTITY = re.compile(r'(?:\$|€|£|₹)?\b\d+(?:[.,]\d+)?%?\b')
+
+WORD_TO_DIGIT = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+    "hundred": "100", "thousand": "1000", "million": "1000000", "billion": "1000000000",
+}
+
+
+def audit_factual_numerical_grounding(source_text: str, draft_text: str) -> tuple[float, list[str]]:
+    """
+    Deterministic Factual Guard (Innovation 4):
+    Pure-Python deterministic anchor running in <2ms. Extracts all numerical entities
+    (currencies, percentages, quantities, metrics) from the summary script and validates
+    that their underlying numeric values exist in the source transcript.
+    Returns (deduction_penalty, list_of_issues).
+    """
+    if not draft_text or not source_text:
+        return 0.0, []
+
+    draft_matches = RE_NUMERICAL_ENTITY.findall(draft_text)
+    if not draft_matches:
+        return 0.0, []
+
+    source_lower = source_text.lower()
+    source_clean = re.sub(r'[,.]', '', source_lower)
+    issues: list[str] = []
+
+    for raw_match in set(draft_matches):
+        cleaned = raw_match.strip("$€£₹%").replace(",", "")
+        if not cleaned:
+            continue
+
+        # Check raw match, cleaned digits, or spoken number words
+        found = False
+        if raw_match.lower() in source_lower or cleaned in source_clean:
+            found = True
+        else:
+            for word, digit in WORD_TO_DIGIT.items():
+                if cleaned == digit and word in source_lower:
+                    found = True
+                    break
+
+        if not found:
+            issues.append(f"Deterministic Factual Guard: Unverified numerical claim '{raw_match}' not found in source transcript.")
+
+    deduction = min(2.0, len(issues) * 0.4)
+    return deduction, issues
+
 
 def _extract_json(raw: str) -> dict:
     """Extracts JSON object from raw LLM output, using OllamaClient with graceful fallback."""
@@ -83,6 +133,9 @@ Draft Narration Script:
 '''
     res = _call_critic_ollama(settings, prompt)
 
+    # Run Deterministic Factual Guard on numerical metrics (<2ms)
+    guard_deduction, guard_issues = audit_factual_numerical_grounding(source_chunk_text, draft_script)
+
     if not res:
         # Fallback heuristic scoring if Ollama critic timed out
         score = 8.5
@@ -90,13 +143,16 @@ Draft Narration Script:
         if detected_sponsor_phrases:
             score -= 2.0 * len(detected_sponsor_phrases)
             issues.extend([f"Detected sponsor phrase: '{p}'" for p in detected_sponsor_phrases])
+        if guard_issues:
+            score -= guard_deduction
+            issues.extend(guard_issues)
         status = "PASS" if score >= 8.0 else ("WARN" if score >= 6.0 else "FAIL")
         return EvaluationResult(
             stage="summarization",
             status=status,
             score=max(0.0, min(10.0, score)),
             issues=issues,
-            metrics={"critic_mode": "heuristic_fallback"},
+            metrics={"critic_mode": "heuristic_fallback", "guard_deduction": guard_deduction},
         )
 
     faithfulness = float(res.get("faithfulness_score", 8.0))
@@ -111,6 +167,10 @@ Draft Narration Script:
                 issues.append(f"Detected sponsor callout: '{p}'")
         ad_removal = min(ad_removal, 5.0)
 
+    if guard_issues:
+        issues.extend(guard_issues)
+        faithfulness = max(1.0, faithfulness - (guard_deduction * 1.5))
+
     overall_score = round((faithfulness * 0.35 + ad_removal * 0.25 + flow * 0.20 + lang * 0.20), 1)
     status = "FAIL" if overall_score < 7.0 or ad_removal < 6.0 else ("WARN" if overall_score < 8.2 else "PASS")
 
@@ -124,6 +184,7 @@ Draft Narration Script:
             "ad_removal": ad_removal,
             "spoken_flow": flow,
             "language_fidelity": lang,
+            "factual_guard_deduction": guard_deduction,
         },
     )
 

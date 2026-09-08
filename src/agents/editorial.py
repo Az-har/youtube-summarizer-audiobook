@@ -13,10 +13,12 @@ from src.processing import (
     _format_time,
     _is_narration_complete,
     _prepare_chunk,
+    chapter_aware_transcript_chunks,
     ensure_ollama_running,
     semantic_transcript_chunks,
 )
 from src.storage import StorageManager
+from src.vram_guard import VRAMGuard
 
 logger = logging.getLogger("EditorialAgent")
 
@@ -47,8 +49,23 @@ class EditorialAgent(BaseAgent):
         if not segments:
             raise ProcessingError("No speech segments available for editorial synthesis.")
 
-        # 1. Semantic Chunking respecting natural speech pauses & sentence endings
-        chunks = semantic_transcript_chunks(segments, target_characters=4000, maximum_characters=6000)
+        # Resolve chapter markers from context if available
+        chapters = []
+        if context.ingestion_result and context.ingestion_result.chapters:
+            chapters = context.ingestion_result.chapters
+        elif context.video and context.video.raw and context.video.raw.get("chapters"):
+            chapters = context.video.raw.get("chapters", [])
+        elif "chapters" in context.state:
+            chapters = context.state["chapters"]
+
+        # 1. Chapter-Aware & Semantic Chunking respecting topic units and speech pauses
+        chunks = chapter_aware_transcript_chunks(
+            segments,
+            chapters=chapters,
+            target_characters=4000,
+            maximum_characters=6000,
+            pause_threshold=1.5,
+        )
 
         # 2. Check verified cached narration
         if output_path.exists():
@@ -92,27 +109,28 @@ class EditorialAgent(BaseAgent):
             end_ts = _format_time(chunk[-1].get("end", 0))
             print(f"    [{idx}/{len(chunks)}] Section {start_ts} -> {end_ts} [Drafting", end="", flush=True)
 
-            chunk_res = _prepare_chunk(context.settings, context.video, source_language, target_language, chunk)
+            with VRAMGuard.guard("Ollama_Editorial"):
+                chunk_res = _prepare_chunk(context.settings, context.video, source_language, target_language, chunk)
 
-            # Autonomous Critic Valuation Loop
-            source_text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in chunk)
-            draft_script = chunk_res.get("script", "")
-            eval_res = judge_summary(context.settings, source_text, draft_script, target_language, context.video.mode)
+                # Autonomous Critic Valuation Loop
+                source_text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in chunk)
+                draft_script = chunk_res.get("script", "")
+                eval_res = judge_summary(context.settings, source_text, draft_script, target_language, context.video.mode)
 
-            if eval_res.status == "FAIL" and eval_res.issues:
-                print(f" -> Critic: {eval_res.score}/10 (FAIL) -> Refining", end="", flush=True)
-                refined_res = refine_summary_with_critique(
-                    context.settings, context.video, source_language, target_language, source_text, draft_script, eval_res.issues
-                )
-                if refined_res.get("script", "").strip():
-                    chunk_res = refined_res
-                    eval_res = judge_summary(context.settings, source_text, chunk_res["script"], target_language, context.video.mode)
-                    eval_res.retries_used = 1
-                    print(f" -> Refined: {eval_res.score}/10 ({eval_res.status})]", flush=True)
+                if eval_res.status == "FAIL" and eval_res.issues:
+                    print(f" -> Critic: {eval_res.score}/10 (FAIL) -> Refining", end="", flush=True)
+                    refined_res = refine_summary_with_critique(
+                        context.settings, context.video, source_language, target_language, source_text, draft_script, eval_res.issues
+                    )
+                    if refined_res.get("script", "").strip():
+                        chunk_res = refined_res
+                        eval_res = judge_summary(context.settings, source_text, chunk_res["script"], target_language, context.video.mode)
+                        eval_res.retries_used = 1
+                        print(f" -> Refined: {eval_res.score}/10 ({eval_res.status})]", flush=True)
+                    else:
+                        print(f" -> Kept Draft ({eval_res.score}/10)]", flush=True)
                 else:
-                    print(f" -> Kept Draft ({eval_res.score}/10)]", flush=True)
-            else:
-                print(f" -> Critic: {eval_res.score}/10 ({eval_res.status})]", flush=True)
+                    print(f" -> Critic: {eval_res.score}/10 ({eval_res.status})]", flush=True)
 
             prepared_chunks.append(chunk_res)
             chunk_evaluations.append(eval_res)

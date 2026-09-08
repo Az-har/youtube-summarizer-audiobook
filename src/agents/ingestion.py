@@ -63,6 +63,20 @@ class IngestionAgent(BaseAgent):
                     except Exception as frame_exc:
                         logger.debug("Local video frame extraction skipped: %s", frame_exc)
 
+        # 2b. Dynamic Generative Studio Title Card (Innovation 5) for audio-only media / missing artwork
+        if not thumbnail_path.exists():
+            try:
+                from src.cover_generator import generate_studio_title_card
+                generate_studio_title_card(
+                    title=context.video.title,
+                    author=context.settings.podcast_author,
+                    duration_seconds=duration,
+                    output_path=thumbnail_path,
+                )
+                self.log(context, f"Generated Studio Title Card: {thumbnail_path.name}")
+            except Exception as cover_exc:
+                logger.debug("Studio cover generation fallback skipped: %s", cover_exc)
+
         chapters = context.video.raw.get("chapters", [])
         if chapters:
             self.log(context, f"Extracted {len(chapters)} chapter markers from source video.")

@@ -376,6 +376,120 @@ def semantic_transcript_chunks(
     return chunks
 
 
+def chapter_aware_transcript_chunks(
+    segments: list[dict],
+    chapters: list[dict] | None = None,
+    target_characters: int = 4000,
+    maximum_characters: int = 6000,
+    pause_threshold: float = 1.5,
+) -> list[list[dict]]:
+    """
+    Chapter-Aware Semantic Narrative Chunking (Innovation 3):
+    Aligns chunk boundaries with author-defined chapter markers when available.
+    - If chapters exist, segments are grouped into coherent topic units.
+    - If a chapter exceeds 12 minutes or 8,000 characters, it is adaptively sub-chunked
+      using semantic speech pauses.
+    - If no chapters exist, gracefully falls back to pause-based semantic_transcript_chunks.
+    """
+    if not segments:
+        return []
+
+    if not chapters or not isinstance(chapters, list) or len(chapters) == 0:
+        return semantic_transcript_chunks(
+            segments,
+            target_characters=target_characters,
+            maximum_characters=maximum_characters,
+            pause_threshold=pause_threshold,
+        )
+
+    # Sort valid chapters by start time
+    sorted_chapters = []
+    for ch in chapters:
+        try:
+            start_t = float(ch.get("start_time", 0.0))
+            end_t = float(ch.get("end_time", 0.0))
+            title = str(ch.get("title", "")).strip()
+            sorted_chapters.append({"start_time": start_t, "end_time": end_t, "title": title})
+        except (ValueError, TypeError):
+            continue
+
+    sorted_chapters.sort(key=lambda x: x["start_time"])
+    if not sorted_chapters:
+        return semantic_transcript_chunks(
+            segments,
+            target_characters=target_characters,
+            maximum_characters=maximum_characters,
+            pause_threshold=pause_threshold,
+        )
+
+    # Assign segments to chapters
+    chapter_buckets: list[list[dict]] = [[] for _ in sorted_chapters]
+    unassigned: list[dict] = []
+
+    for seg in segments:
+        seg_start = float(seg.get("start", 0.0))
+        assigned = False
+        for idx, ch in enumerate(sorted_chapters):
+            ch_start = ch["start_time"]
+            ch_end = ch["end_time"]
+            if ch_end <= ch_start:
+                if idx + 1 < len(sorted_chapters):
+                    ch_end = sorted_chapters[idx + 1]["start_time"]
+                else:
+                    ch_end = float("inf")
+
+            if ch_start <= seg_start < ch_end:
+                chapter_buckets[idx].append(seg)
+                assigned = True
+                break
+
+        if not assigned:
+            if sorted_chapters and seg_start < sorted_chapters[0]["start_time"]:
+                chapter_buckets[0].append(seg)
+            elif sorted_chapters:
+                chapter_buckets[-1].append(seg)
+            else:
+                unassigned.append(seg)
+
+    result_chunks: list[list[dict]] = []
+    for idx, bucket in enumerate(chapter_buckets):
+        if not bucket:
+            continue
+        ch = sorted_chapters[idx]
+        ch_title = ch.get("title", "")
+        total_chars = sum(len(s.get("text", "")) for s in bucket)
+        dur = float(bucket[-1].get("end", 0.0)) - float(bucket[0].get("start", 0.0))
+
+        if ch_title and bucket:
+            bucket[0]["_chapter_title"] = ch_title
+
+        if dur > 720.0 or total_chars > 8000:
+            sub = semantic_transcript_chunks(
+                bucket,
+                target_characters=target_characters,
+                maximum_characters=maximum_characters,
+                pause_threshold=pause_threshold,
+            )
+            result_chunks.extend(sub)
+        else:
+            result_chunks.append(bucket)
+
+    if unassigned:
+        result_chunks.extend(semantic_transcript_chunks(
+            unassigned,
+            target_characters=target_characters,
+            maximum_characters=maximum_characters,
+            pause_threshold=pause_threshold,
+        ))
+
+    return result_chunks if result_chunks else semantic_transcript_chunks(
+        segments,
+        target_characters=target_characters,
+        maximum_characters=maximum_characters,
+        pause_threshold=pause_threshold,
+    )
+
+
 def _transcript_chunks(segments: list[dict], maximum_characters: int = 6000) -> list[list[dict]]:
     """Backward-compatible wrapper routing to semantic_transcript_chunks."""
     target = min(int(maximum_characters * 0.75), max(50, maximum_characters - 100))

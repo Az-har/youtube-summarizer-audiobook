@@ -169,6 +169,64 @@ class ArchitecturalRefinementsTests(unittest.TestCase):
         rate = _calculate_ngram_repetition_rate(tokens, n=4)
         self.assertGreater(rate, 0.0)
 
+    def test_chapter_aware_transcript_chunks(self):
+        from src.processing import chapter_aware_transcript_chunks
+        segments = [
+            {"start": 0.0, "end": 10.0, "text": "Segment in chapter 1."},
+            {"start": 10.0, "end": 20.0, "text": "Another in chapter 1."},
+            {"start": 60.0, "end": 70.0, "text": "Segment in chapter 2."},
+            {"start": 70.0, "end": 80.0, "text": "Another in chapter 2."},
+        ]
+        chapters = [
+            {"start_time": 0.0, "end_time": 50.0, "title": "Chapter 1: Intro"},
+            {"start_time": 50.0, "end_time": 100.0, "title": "Chapter 2: Core Topic"},
+        ]
+        chunks = chapter_aware_transcript_chunks(segments, chapters=chapters)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0][0]["_chapter_title"], "Chapter 1: Intro")
+        self.assertEqual(chunks[1][0]["_chapter_title"], "Chapter 2: Core Topic")
+
+        # Test fallback when chapters are None
+        fallback_chunks = chapter_aware_transcript_chunks(segments, chapters=None)
+        self.assertGreaterEqual(len(fallback_chunks), 1)
+
+    def test_deterministic_factual_guard(self):
+        from src.evaluators.summary_evaluator import audit_factual_numerical_grounding
+        source = "Revenue increased by 15% in 2023, totaling 100 million dollars."
+
+        # Faithful draft matching numbers
+        faithful_draft = "In 2023, the growth was 15% with 100 million in revenue."
+        deduction, issues = audit_factual_numerical_grounding(source, faithful_draft)
+        self.assertEqual(deduction, 0.0)
+        self.assertEqual(len(issues), 0)
+
+        # Hallucinated draft altering 15% to 50% and adding ungrounded $500
+        hallucinated_draft = "Growth skyrocketed to 50% and generated $500."
+        deduction, issues = audit_factual_numerical_grounding(source, hallucinated_draft)
+        self.assertGreater(deduction, 0.0)
+        self.assertTrue(any("50%" in issue or "500" in issue for issue in issues))
+
+    def test_studio_title_card_generation(self):
+        from PIL import Image
+        from src.cover_generator import generate_studio_title_card
+        out_jpg = self.root / "cover_test.jpg"
+        generated = generate_studio_title_card(
+            title="The Future of Quantum Computing and AI Architecture",
+            author="Azhar",
+            duration_seconds=3600.0,
+            output_path=out_jpg,
+        )
+        self.assertTrue(generated.exists())
+        self.assertGreater(generated.stat().st_size, 5000)
+        with Image.open(str(generated)) as img:
+            self.assertEqual(img.size, (1920, 1080))
+
+    def test_vram_guard_concurrency(self):
+        from src.vram_guard import VRAMGuard
+        # Test basic acquisition and release
+        with VRAMGuard.guard("Test_Stage") as acquired:
+            self.assertTrue(acquired)
+
 
 if __name__ == "__main__":
     unittest.main()
