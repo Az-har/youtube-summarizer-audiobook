@@ -106,11 +106,21 @@ class YouTubeVideoPublisher(BasePodcastPublisher):
         if not thumb:
             thumb = self.output_dir / f"{video.video_id}_thumb.jpg"
             if not thumb.exists():
-                ffmpeg_bin = _find_ffmpeg(self.settings.ffmpeg_binary)
-                subprocess.run([
-                    ffmpeg_bin, "-y", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:d=1",
-                    "-frames:v", "1", str(thumb)
-                ], capture_output=True)
+                try:
+                    from src.cover_generator import generate_studio_title_card
+                    generate_studio_title_card(
+                        title=video.title,
+                        author=self.settings.podcast_author,
+                        duration_seconds=duration_seconds,
+                        output_path=thumb,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to generate studio title card: %s; falling back to solid background.", e)
+                    ffmpeg_bin = _find_ffmpeg(self.settings.ffmpeg_binary)
+                    subprocess.run([
+                        ffmpeg_bin, "-y", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:d=1",
+                        "-frames:v", "1", str(thumb)
+                    ], capture_output=True)
 
         if not output_mp4.exists() or output_mp4.stat().st_size == 0:
             print(f"  [YouTubePublisher] Rendering 1080p MP4 podcast video for: {video.title}...", flush=True)

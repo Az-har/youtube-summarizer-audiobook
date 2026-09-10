@@ -37,26 +37,24 @@ class EditorialAgent(BaseAgent):
         output_path = context.working_dir / "narration.json"
         script_path = context.working_dir / "summary.txt"
 
-        # Resolve transcript from typed DTO, context, or state
-        if transcription:
-            transcript = transcription.transcript_data
-        elif context.transcription_result:
-            transcript = context.transcription_result.transcript_data
-        else:
-            transcript = context.state.get("transcript_data", {})
+        # Resolve transcript from typed DTO with fallback to context.state
+        trans_res = transcription or context.transcription_result
+        transcript = (trans_res.transcript_data if trans_res else {}) or context.state.get("transcript_data", {})
 
         segments = transcript.get("segments", [])
         if not segments:
             raise ProcessingError("No speech segments available for editorial synthesis.")
 
-        # Resolve chapter markers from context if available
+        # Resolve chapter markers from typed IngestionResult, context.state, or video metadata
         chapters = []
         if context.ingestion_result and context.ingestion_result.chapters:
             chapters = context.ingestion_result.chapters
+        elif context.state.get("chapters"):
+            chapters = context.state.get("chapters")
+        elif getattr(context.video, "chapters", None):
+            chapters = context.video.chapters
         elif context.video and context.video.raw and context.video.raw.get("chapters"):
             chapters = context.video.raw.get("chapters", [])
-        elif "chapters" in context.state:
-            chapters = context.state["chapters"]
 
         # 1. Chapter-Aware & Semantic Chunking respecting topic units and speech pauses
         chunks = chapter_aware_transcript_chunks(
@@ -67,27 +65,20 @@ class EditorialAgent(BaseAgent):
             pause_threshold=1.5,
         )
 
-        # 2. Check verified cached narration
-        if output_path.exists():
-            try:
-                cached = json.loads(output_path.read_text(encoding="utf-8"))
-                if _is_narration_complete(cached, len(chunks)):
-                    self.log(context, f"Verified complete summary found on disk ({len(chunks)} sections).")
-                    script_path.write_text(cached["script"], encoding="utf-8")
-                    result = EditorialResult(
-                        narration_path=output_path,
-                        summary_path=script_path,
-                        script=cached["script"],
-                        target_language=cached.get("target_language", "English"),
-                        critic_score=cached.get("critic_score", 9.0),
-                    )
-                    context.editorial_result = result
-                    return result
-                else:
-                    StorageManager.safe_delete(output_path)
-            except Exception as exc:
-                logger.debug(f"Cache check error: {exc}")
-                StorageManager.safe_delete(output_path)
+        # 2. Check verified cached narration via StorageManager
+        cached = StorageManager.is_narration_cached(output_path, len(chunks))
+        if cached:
+            self.log(context, f"Verified complete summary found on disk ({len(chunks)} sections).")
+            script_path.write_text(cached["script"], encoding="utf-8")
+            result = EditorialResult(
+                narration_path=output_path,
+                summary_path=script_path,
+                script=cached["script"],
+                target_language=cached.get("target_language", "English"),
+                critic_score=cached.get("critic_score", 9.0),
+            )
+            context.editorial_result = result
+            return result
 
         # 3. Ensure Ollama daemon is active
         if not ensure_ollama_running(context.settings):

@@ -33,22 +33,12 @@ class AudiobookAgent(BaseAgent):
         output_audio = context.working_dir / "narration.mp3"
         script_path = context.working_dir / "summary.txt"
 
-        if editorial:
-            target_language = editorial.target_language
-        elif context.editorial_result:
-            target_language = context.editorial_result.target_language
-        else:
-            target_language = context.state.get("target_language", "English")
+        edit = editorial or context.editorial_result
+        target_language = edit.target_language if edit else "English"
 
-        if ingestion:
-            thumb_path = ingestion.thumbnail_path
-            chapters = ingestion.chapters
-        elif context.ingestion_result:
-            thumb_path = context.ingestion_result.thumbnail_path
-            chapters = context.ingestion_result.chapters
-        else:
-            thumb_path = context.state.get("thumbnail_path")
-            chapters = context.state.get("chapters", [])
+        ingest = ingestion or context.ingestion_result
+        thumb_path = ingest.thumbnail_path if ingest else None
+        chapters = ingest.chapters if ingest else []
 
         if context.settings.tts_provider.lower().strip() in ("none", "disabled", "false", "0"):
             self.log(context, "TTS synthesis is disabled in settings.")

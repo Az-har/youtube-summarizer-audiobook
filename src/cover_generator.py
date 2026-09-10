@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import functools
 import logging
 import os
 import sys
@@ -9,6 +8,7 @@ from pathlib import Path
 logger = logging.getLogger("CoverGenerator")
 
 
+@functools.lru_cache(maxsize=16)
 def _resolve_font(size: int):
     """Discovers a clean sans-serif TrueType font across Windows/Linux, with graceful default fallback."""
     from PIL import ImageFont

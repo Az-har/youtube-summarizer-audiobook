@@ -93,14 +93,20 @@ class QualityScorecard:
         }
 
 
+def sanitize_local_video_id(stem: str) -> str:
+    """Consistently sanitizes local audio/video file stem into a valid video_id across pipeline and daemon."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
+    return f"local_{safe[:48]}"
+
+
 @dataclass
 class ProcessResult:
     video: Video
     status: str
     message: str = ""
-    transcript_path: str = ""
-    summary_path: str = ""
-    audio_path: str = ""
+    transcript_path: Path | str = ""
+    summary_path: Path | str = ""
+    audio_path: Path | str = ""
     warnings: list[str] = field(default_factory=list)
     scorecard: QualityScorecard | None = None
 
@@ -110,8 +116,7 @@ class DictAccessMixin:
 
     def __getitem__(self, item: str) -> Any:
         if hasattr(self, item):
-            val = getattr(self, item)
-            return str(val) if isinstance(val, Path) and item.endswith("_path") and False else val
+            return getattr(self, item)
         raise KeyError(item)
 
     def get(self, item: str, default: Any = None) -> Any:

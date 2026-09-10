@@ -51,7 +51,6 @@ class SupervisorAgent(BaseAgent):
         # -------------------------------------------------------------
         ingest_res: IngestionResult = self.ingestion.run(context)
         context.ingestion_result = ingest_res
-        context.state.update(ingest_res.to_dict())
         scorecard.add_result(EvaluationResult(
             stage="ingestion",
             status="PASS",
@@ -64,7 +63,6 @@ class SupervisorAgent(BaseAgent):
         # -------------------------------------------------------------
         trans_res: TranscriptionResult = self.transcription.run(context, ingestion=ingest_res)
         context.transcription_result = trans_res
-        context.state.update(trans_res.to_dict())
         if trans_res.audit_result:
             scorecard.add_result(trans_res.audit_result)
 
@@ -73,7 +71,6 @@ class SupervisorAgent(BaseAgent):
         # -------------------------------------------------------------
         edit_res: EditorialResult = self.editorial.run(context, transcription=trans_res)
         context.editorial_result = edit_res
-        context.state.update(edit_res.to_dict())
         critic_score = edit_res.critic_score
         scorecard.add_result(EvaluationResult(
             stage="summarization",
@@ -87,7 +84,6 @@ class SupervisorAgent(BaseAgent):
         # -------------------------------------------------------------
         audio_res: AudiobookResult = self.audiobook.run(context, editorial=edit_res, ingestion=ingest_res)
         context.audiobook_result = audio_res
-        context.state.update(audio_res.to_dict())
         if audio_res.audit_result:
             scorecard.add_result(audio_res.audit_result)
 

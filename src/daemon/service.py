@@ -103,8 +103,10 @@ class DaemonService:
                 except Exception:
                     duration = 0.0
 
+                from src.models import sanitize_local_video_id
+
                 vid = Video(
-                    video_id=f"local_{file_path.stem[:32]}",
+                    video_id=sanitize_local_video_id(file_path.stem),
                     title=file_path.stem,
                     url=str(file_path),
                     duration_seconds=duration,

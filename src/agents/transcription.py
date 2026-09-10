@@ -54,16 +54,10 @@ class TranscriptionAgent(BaseAgent):
         transcript_path = context.working_dir / "transcript.json"
         txt_path = context.working_dir / "transcript.txt"
 
-        # Resolve wav path & duration from typed DTO, context, or state
-        if ingestion:
-            wav_path = ingestion.wav_16k_path or (context.working_dir / f"{context.video.video_id}_16k.wav")
-            audio_dur = ingestion.duration_seconds
-        elif context.ingestion_result:
-            wav_path = context.ingestion_result.wav_16k_path or (context.working_dir / f"{context.video.video_id}_16k.wav")
-            audio_dur = context.ingestion_result.duration_seconds
-        else:
-            wav_path = context.state.get("wav_16k_path") or (context.working_dir / f"{context.video.video_id}_16k.wav")
-            audio_dur = float(context.state.get("duration_seconds", 0.0))
+        # Resolve wav path & duration from typed IngestionResult
+        ingest = ingestion or context.ingestion_result
+        wav_path = (ingest.wav_16k_path if ingest else None) or (context.working_dir / f"{context.video.video_id}_16k.wav")
+        audio_dur = ingest.duration_seconds if ingest else 0.0
 
         # 1. Check verified cached transcript via StorageManager
         cached = StorageManager.is_transcription_cached(transcript_path, wav_path, context.settings)

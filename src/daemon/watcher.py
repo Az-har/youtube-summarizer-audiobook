@@ -17,6 +17,8 @@ class IngestionWatcher:
         self.playlist_file = playlist_file
         self.logger = logging.getLogger("Watcher")
         self.input_dir.mkdir(parents=True, exist_ok=True)
+        self._last_playlist_mtime: float = 0.0
+        self._cached_playlist_urls: list[str] = []
 
     def scan_and_enqueue(self) -> int:
         """Scans sources and enqueues new items. Returns count of newly enqueued tasks."""
@@ -32,18 +34,24 @@ class IngestionWatcher:
                         print(f"  [Watcher] Enqueued local file: {file_path.name}", flush=True)
                         enqueued_count += 1
 
-        # 2. Scan Playlists File
+        # 2. Scan Playlists File (re-reads only if mtime has changed)
         if self.playlist_file.exists():
             try:
-                lines = self.playlist_file.read_text(encoding="utf-8").splitlines()
-                for line in lines:
-                    url = line.strip()
-                    if url and not url.startswith("#") and ("http://" in url or "https://" in url):
-                        task = self.queue.enqueue(url, source_type="youtube")
-                        if task:
-                            self.logger.info(f"Detected new YouTube link: {url}")
-                            print(f"  [Watcher] Enqueued YouTube URL: {url}", flush=True)
-                            enqueued_count += 1
+                mtime = self.playlist_file.stat().st_mtime
+                if mtime != self._last_playlist_mtime:
+                    self._last_playlist_mtime = mtime
+                    lines = self.playlist_file.read_text(encoding="utf-8").splitlines()
+                    self._cached_playlist_urls = [
+                        line.strip()
+                        for line in lines
+                        if line.strip() and not line.strip().startswith("#") and ("http://" in line or "https://" in line)
+                    ]
+                for url in self._cached_playlist_urls:
+                    task = self.queue.enqueue(url, source_type="youtube")
+                    if task:
+                        self.logger.info(f"Detected new YouTube link: {url}")
+                        print(f"  [Watcher] Enqueued YouTube URL: {url}", flush=True)
+                        enqueued_count += 1
             except Exception as exc:
                 self.logger.warning(f"Error reading playlist file {self.playlist_file}: {exc}")
 

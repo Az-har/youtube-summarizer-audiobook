@@ -95,13 +95,12 @@ def get_local_media_videos(input_dir: Path) -> list[Video]:
     valid_exts = {".mp3", ".wav", ".m4a", ".mp4", ".mkv", ".webm", ".flac", ".aac", ".ogg"}
     media_files = [f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
     
+    from src.models import sanitize_local_video_id
     from src.processing import _get_audio_duration
 
     videos: list[Video] = []
     for f in sorted(media_files):
-        # Sanitize video_id for folder names
-        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in f.stem)
-        vid_id = f"local_{safe_id}"
+        vid_id = sanitize_local_video_id(f.stem)
         duration = 0.0
         try:
             duration = _get_audio_duration(f)

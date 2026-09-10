@@ -58,18 +58,6 @@ def audit_factual_numerical_grounding(source_text: str, draft_text: str) -> tupl
     return deduction, issues
 
 
-def _extract_json(raw: str) -> dict:
-    """Extracts JSON object from raw LLM output, using OllamaClient with graceful fallback."""
-    if not raw:
-        return {}
-    from src.processing import OllamaClient
-    try:
-        return OllamaClient.extract_json(raw)
-    except Exception as exc:
-        logger.debug("Failed to extract JSON from LLM text (%s), returning empty dict.", exc)
-        return {}
-
-
 def _call_critic_ollama(settings: Settings, prompt: str) -> dict:
     from src.processing import OllamaClient
     try:
@@ -202,7 +190,7 @@ def refine_summary_with_critique(
     Self-Healing Agent: Re-generates and refines the draft script incorporating
     the specific Critic issues identified during valuation.
     """
-    from src.processing import _ollama
+    from src.processing import OllamaClient
 
     issues_formatted = "\n".join(f"- {issue}" for issue in critique_issues)
     task = "near-complete cleaned read-aloud" if video.mode == "clean_readaloud" else "detailed information-first synthesis"
@@ -228,4 +216,4 @@ Original Speech Transcript:
 Previous Flawed Draft:
 {draft_script}'''
 
-    return _ollama(settings, prompt)
+    return OllamaClient.generate_json(settings.ollama_base_url, settings.ollama_model, prompt)
