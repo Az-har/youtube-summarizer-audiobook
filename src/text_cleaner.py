@@ -8,6 +8,43 @@ RE_PAREN_NOISE = re.compile(r'\((music|applause|laughter|silence|cheering|noise)
 RE_MULTI_WHITESPACE = re.compile(r'\s+')
 RE_NORMALIZE = re.compile(r'[^\w\s]')
 
+# Spoken disfluency and visual crutch regexes
+RE_SPOKEN_FILLER = re.compile(
+    r'\b(?:um+|uh+|er+|ah+|you know what I mean|you know|sort of|kind of|basically|like I said)\b',
+    flags=re.IGNORECASE,
+)
+RE_VISUAL_CRUTCHES = re.compile(
+    r'\b(?:as (?:you can )?see on (?:the |my )?screen|look at (?:this|the) (?:slide|diagram|chart|screen|figure)|'
+    r'on my screen right now|in the diagram below|click (?:here|on this link|the link in the description)|'
+    r'as shown on (?:the )?screen)\b',
+    flags=re.IGNORECASE,
+)
+RE_META_CHATTER = re.compile(
+    r'\b(?:welcome back to (?:my |the )?channel|in today\'?s video|in this video today|'
+    r'leave a comment (?:down )?below|hit (?:the |that )?notification bell|'
+    r'don\'t forget to like and subscribe|subscribe to (?:my |the )?channel)\b',
+    flags=re.IGNORECASE,
+)
+RE_ROBOTIC_SEAM_OPENERS = re.compile(
+    r'^(?:(?:in this (?:section|part|video|segment|chapter|clip),?|next,?|moving on(?:,| to)?|moving forward(?:,| to)?|'
+    r'furthermore,?|continuing from (?:earlier|before),?|the speaker (?:explains|discusses|continues|notes|highlights))\s*)+',
+    flags=re.IGNORECASE,
+)
+RE_MARKDOWN_HEADERS = re.compile(r'^\s*#+.*$', flags=re.MULTILINE)
+RE_MARKDOWN_BOLD_ITALIC = re.compile(r'[*_]{1,3}([^*_]+)[*_]{1,3}')
+RE_MARKDOWN_CODE = re.compile(r'`+([^`]+)`+')
+RE_MARKDOWN_BULLETS = re.compile(r'^\s*[-*•]\s+', flags=re.MULTILINE)
+
+# Abbreviations expanded for neural audio playback
+SPOKEN_ABBREVIATIONS = (
+    (re.compile(r'\be\.g\.,?\s*', flags=re.IGNORECASE), "for example, "),
+    (re.compile(r'\bi\.e\.,?\s*', flags=re.IGNORECASE), "that is, "),
+    (re.compile(r'\bvs\.?\s*', flags=re.IGNORECASE), "versus "),
+    (re.compile(r'\betc\.?\b', flags=re.IGNORECASE), "and so on"),
+    (re.compile(r'\bw/\b', flags=re.IGNORECASE), "with "),
+)
+
+
 
 def remove_repeated_words(text: str) -> str:
     """
@@ -144,3 +181,80 @@ def format_paragraphs(segments: List[Dict[str, Any]], pause_threshold: float = 1
         paragraphs.append(para_str)
 
     return "\n\n".join(paragraphs)
+
+
+def sanitize_spoken_transcript(text: str) -> str:
+    """
+    Sanitizes raw conversational transcript text prior to AI rewriting:
+    - Strips bracket/parenthetical noise artifacts
+    - Strips speech disfluencies (stutters, repeated phrases, filler words like 'um', 'uh', 'you know')
+    - Strips multimodal visual crutches ('as you see on screen', 'look at this slide')
+    - Strips YouTube/podcast meta-chatter and subscription calls
+    - Normalizes spacing and punctuation
+    """
+    if not text:
+        return ""
+    text = clean_transcript_text(text)
+    text = RE_VISUAL_CRUTCHES.sub("", text)
+    text = RE_META_CHATTER.sub("", text)
+    text = RE_SPOKEN_FILLER.sub("", text)
+    # Clean dangling punctuation left by removed words
+    text = re.sub(r'^[,\s]+', '', text)
+    text = re.sub(r'[,\s]+$', '', text)
+    text = re.sub(r'\s*,\s*,+', ',', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def stitch_narrative_continuity(sections: List[str]) -> str:
+    """
+    Stitches multiple consecutive section scripts into a single, cohesive spoken audiobook narrative:
+    1. Seam Smoothing: Eliminates repetitive robotic transitional openers from consecutive sections
+       (e.g., 'In this section, we examine', 'Next, the speaker discusses', 'Moving forward').
+    2. Markdown Stripping: Removes hashes (#), asterisks (*), backticks (`), and bullet lists (-)
+       that cause neural TTS (Edge-TTS) to stumble or recite literal punctuation symbols.
+    3. Spoken Expansion: Expands written abbreviations (e.g., i.e., vs., etc.) into natural spoken words.
+    4. Prosody & Cadence: Normalizes em-dashes and ellipses to generate clean breath pauses in TTS.
+    """
+    if not sections:
+        return ""
+
+    polished_sections: list[str] = []
+
+    for idx, raw_section in enumerate(sections):
+        if not raw_section or not raw_section.strip():
+            continue
+
+        text = raw_section.strip()
+
+        # 1. Markdown & Structural Formatting Removal (TTS Optimization)
+        text = RE_MARKDOWN_HEADERS.sub("", text)
+        text = RE_MARKDOWN_BULLETS.sub("", text)
+        text = RE_MARKDOWN_CODE.sub(r"\1", text)
+        text = RE_MARKDOWN_BOLD_ITALIC.sub(r"\1", text)
+        text = text.strip()
+
+        # 2. Seam Smoothing: Strip robotic chunk intro clichés on subsequent sections
+        if idx > 0:
+            cleaned_opener = RE_ROBOTIC_SEAM_OPENERS.sub("", text).strip()
+            # Clean any leading comma or punctuation left behind
+            cleaned_opener = re.sub(r'^[,\s;:-]+', '', cleaned_opener).strip()
+            if cleaned_opener:
+                # Capitalize first character of the seamlessly continued sentence
+                text = cleaned_opener[0].upper() + cleaned_opener[1:] if len(cleaned_opener) > 1 else cleaned_opener.upper()
+
+        # 3. Spoken Abbreviation Expansion
+        for pattern, replacement in SPOKEN_ABBREVIATIONS:
+            text = pattern.sub(replacement, text)
+
+        # 4. Neural TTS Prosody & Breathing Normalization
+        text = re.sub(r'\s*(?:---|--|—)\s*', ' — ', text)
+        text = re.sub(r'\.{2,}', '...', text)
+        lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.splitlines()]
+        text = "\n".join(line for line in lines if line)
+
+        if text:
+            polished_sections.append(text)
+
+    return "\n\n".join(polished_sections)
+

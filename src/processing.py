@@ -496,15 +496,70 @@ def _transcript_chunks(segments: list[dict], maximum_characters: int = 6000) -> 
     return semantic_transcript_chunks(segments, target_characters=target, maximum_characters=maximum_characters)
 
 
-def _prepare_chunk(settings: Settings, video: Video, source_language: str, target_language: str, segments: list[dict]) -> dict:
-    source_text = "\n".join(
-        f"[{segment['start']:.1f}-{segment['end']:.1f}] {segment['text']}" for segment in segments
+def _prepare_chunk(
+    settings: Settings,
+    video: Video,
+    source_language: str,
+    target_language: str,
+    segments: list[dict],
+    section_idx: int = 1,
+    total_sections: int = 1,
+    chapter_title: str = "",
+    previous_section_tail: str = "",
+) -> dict:
+    from src.text_cleaner import sanitize_spoken_transcript
+
+    source_lines = []
+    for segment in segments:
+        raw_text = segment.get("text", "")
+        cleaned_text = sanitize_spoken_transcript(raw_text)
+        if cleaned_text:
+            source_lines.append(f"[{segment.get('start', 0.0):.1f}-{segment.get('end', 0.0):.1f}] {cleaned_text}")
+
+    source_text = "\n".join(source_lines) if source_lines else "\n".join(
+        f"[{s.get('start', 0.0):.1f}-{s.get('end', 0.0):.1f}] {s.get('text', '')}" for s in segments
     )
-    task = "near-complete cleaned read-aloud" if video.mode == "clean_readaloud" else "detailed information-first synthesis"
+
+    if video.mode == "translation":
+        task = "faithful, natural spoken translation preserving the full dialog and intent into fluent spoken phrasing"
+    elif video.mode == "absolute_summary":
+        task = "high-signal absolute distillation (extract only the core substance, foundational logic, mechanisms, and actionable insights; deliberately omit conversational buildup, secondary examples, redundancies, and non-essential padding)"
+    elif video.mode == "clean_readaloud":
+        task = "near-complete cleaned read-aloud"
+    else:
+        task = "detailed information-first synthesis"
+
+    # Contextual story arc & section role
+    context_lines = [f"- Video Title: {video.title}"]
+    if chapter_title:
+        context_lines.append(f"- Current Chapter: {chapter_title}")
+    context_lines.append(f"- Section: {section_idx} of {total_sections}")
+
+    if section_idx == 1 and total_sections > 1:
+        narrative_arc = "Opening Prologue: Craft an engaging, warm conversational hook suitable for an immersive solo podcast/audiobook host."
+    elif section_idx == total_sections and total_sections > 1:
+        narrative_arc = "Concluding Epilogue: Synthesize a thoughtful, memorable conclusion and final takeaways suitable for an audiobook finale."
+    else:
+        narrative_arc = "Core Narrative: Seamlessly develop concepts with active conversational pacing and flowing transitions."
+    context_lines.append(f"- Narrative Role: {narrative_arc}")
+
+    # Continuation instruction
+    if previous_section_tail and previous_section_tail.strip():
+        continuation_prompt = f'''  5. NARRATIVE CONTINUATION REQUIREMENT:
+     The previous section concluded with:
+     "{previous_section_tail.strip()}"
+     You MUST weave the beginning of this section seamlessly and directly from that concluding thought.
+     STRICT PROHIBITION: NEVER use introductory transitional framing (DO NOT say "In this section", "Next, we will look at", "Moving on", "Furthermore", or "The speaker continues"). Start immediately with substantive prose.'''
+    else:
+        continuation_prompt = '''  5. NARRATIVE OPENING: Begin directly with an engaging, articulate spoken hook. Never announce the video, speaker, or section.'''
+
     prompt = f'''You prepare one consecutive section of a factual spoken audio digest. Return ONLY valid JSON with this exact schema:
 {{
   "section_title": "string",
   "script": "string",
+  "core_thesis": "string",
+  "mental_models": [{{"title": "string", "description": "string"}}],
+  "actionable_takeaways": ["string"],
   "removed_segments": ["string"],
   "warnings": ["string"]
 }}
@@ -513,16 +568,22 @@ Input details:
 - Source language: {source_language}
 - Target narration language: {target_language}
 - Task: {task}
+{chr(10).join(context_lines)}
 - Rules:
-  1. Produce polished, professional spoken prose intended to be listened to as an audiobook.
+  1. Persona & Tone: Speak as an engaging, warm, articulate solo podcast/audiobook host. Use natural conversational phrasing, rhetorical hooks, and flowing momentum. NEVER sound like a dry textbook or clinical report.
   2. Maintain 100% factual fidelity to the source audio. DO NOT hallucinate facts, metrics, or claims.
   3. Strip all sponsor shoutouts, subscriber requests, channel likes, and promo segments.
-  4. Write purely in {target_language}.
+  4. Translate all visual references (slides, screen gestures) into auditory conceptual explanations.
+{continuation_prompt}
+  6. Spoken Cadence: Write in natural conversational sentences (10-25 words) with strategic breath pauses (commas, em-dashes). Absolutely no robotic monotone.
+  7. Second Brain Distillation: Provide a 1-sentence 'core_thesis', key 'mental_models', and concrete 'actionable_takeaways' capturing the pure signal of this section.
+  8. Write purely in {target_language}.
 
 Transcript section:
 {source_text}
 '''
     return _ollama(settings, prompt)
+
 
 
 def _is_narration_complete(narration_data: dict, expected_chunks_count: int) -> bool:
@@ -566,7 +627,7 @@ def prepare_narration(settings: Settings, video: Video, transcript: dict, output
 
 
 def synthesize(settings: Settings, script_path: Path, output_audio: Path, language: str) -> Path | None:
-    """Synthesize high-quality spoken audio from the summary script using edge-tts or custom CLI."""
+    """Synthesize high-quality spoken audio from the summary script using Kokoro-82M, edge-tts, or custom CLI."""
     cached_audio = StorageManager.is_audiobook_cached(output_audio)
     if cached_audio:
         print(f"  Found verified TTS audio on disk ({output_audio.stat().st_size // 1024} KB).")
@@ -574,43 +635,6 @@ def synthesize(settings: Settings, script_path: Path, output_audio: Path, langua
 
     StorageManager.safe_delete(output_audio)
 
-    provider = settings.tts_provider.lower().strip()
-    if provider in ("none", "disabled", "false", "0"):
-        return None
+    from src.tts_engine import synthesize_spoken_audio
+    return synthesize_spoken_audio(settings, script_path, output_audio, language)
 
-    is_tamil = language.lower() == "tamil"
-    default_voice = "ta-IN-ValluvarNeural" if is_tamil else "en-US-ChristopherNeural"
-    voice = (settings.tts_voice_tamil if is_tamil else settings.tts_voice_english) or default_voice
-
-    text = script_path.read_text(encoding="utf-8").strip()
-    if not text:
-        return None
-
-    # 1. Native edge-tts provider (high quality neural voice)
-    if provider in ("edge", "edge-tts", "auto", "default") or not settings.tts_command_template.strip():
-        try:
-            import asyncio
-            import edge_tts
-
-            print(f"  Synthesizing spoken audio with neural TTS ({voice})...")
-
-            async def _run_edge_tts():
-                comm = edge_tts.Communicate(text, voice)
-                await comm.save(str(output_audio))
-
-            asyncio.run(_run_edge_tts())
-            if output_audio.exists() and output_audio.stat().st_size > 1024:
-                return output_audio
-        except Exception as exc:
-            logger.warning(f"edge-tts failed ({exc}), checking fallback command template...")
-
-    # 2. Custom command template fallback
-    if settings.tts_command_template.strip():
-        command = settings.tts_command_template.format(
-            text_path=str(script_path), output_path=str(output_audio), language=language, voice=voice
-        )
-        run_command(shlex.split(command), "local TTS")
-        if output_audio.exists() and output_audio.stat().st_size > 1024:
-            return output_audio
-
-    return None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.models import Settings
 from src.publishers.base import BasePodcastPublisher
+from src.publishers.notion_publisher import NotionPublisher
 from src.publishers.rss_feed import RSSPodcastPublisher
 from src.publishers.youtube_video import YouTubeVideoPublisher, render_podcast_video
 from src.publishers.ytmusic_upload import YTMusicLibraryPublisher

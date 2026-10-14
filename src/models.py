@@ -12,9 +12,18 @@ class Video:
     channel_title: str = ""
     duration_seconds: int = 0
     raw: dict = field(default_factory=dict)
+    requested_mode: str = "auto"
+    notion_page_id: str = ""
 
     @property
     def mode(self) -> str:
+        req = (self.requested_mode or "").lower().strip()
+        if req in ("translate", "translation"):
+            return "translation"
+        if req in ("absolute_summary", "summarize", "summary"):
+            return "absolute_summary"
+        if req in ("clean_readaloud", "detailed_synthesis"):
+            return req
         return "clean_readaloud" if self.duration_seconds < 20 * 60 else "detailed_synthesis"
 
 
@@ -32,8 +41,15 @@ class Settings:
     tts_command_template: str = ""
     tts_voice_tamil: str = ""
     tts_voice_english: str = ""
+    kokoro_voice: str = "af_heart"
+    kokoro_speed: float = 1.0
     ffmpeg_binary: str = "ffmpeg"
     ytdlp_binary: str = "yt-dlp"
+    # Notion Settings
+    notion_api_key: str = ""
+    notion_database_id: str = ""
+    notion_page_id: str = ""
+    notion_sync_enabled: bool = False
     # YouTube Music Podcast Publisher Settings
     podcast_publisher_mode: str = "rss"  # "rss", "youtube_video", "ytmusic_library", "none"
     podcast_title: str = "AI Audiobook & Video Summaries"

@@ -48,6 +48,33 @@ class TextCleanerTests(unittest.TestCase):
         texts = [s["text"] for s in deduped]
         self.assertEqual(texts, ["Valid sentence here.", "Thank you for watching.", "Thank you for watching.", "Next topic begins now."])
 
+    def test_sanitize_spoken_transcript(self):
+        from src.text_cleaner import sanitize_spoken_transcript
+        raw = "Um, welcome back to my channel! So basically, as you can see on the screen, gradient descent minimizes loss. Look at this slide right here."
+        sanitized = sanitize_spoken_transcript(raw)
+        self.assertNotIn("welcome back to my channel", sanitized)
+        self.assertNotIn("as you can see on the screen", sanitized)
+        self.assertNotIn("look at this slide", sanitized)
+        self.assertIn("gradient descent minimizes loss", sanitized)
+
+    def test_stitch_narrative_continuity(self):
+        from src.text_cleaner import stitch_narrative_continuity
+        sec1 = "Machine learning relies on mathematical optimization to minimize loss functions."
+        sec2 = "In this section, we examine how gradient descent iteratively updates weights (e.g., with small steps)."
+        sec3 = "### Conclusion\n- Moving forward, deep networks build directly on these mathematical foundations."
+
+        stitched = stitch_narrative_continuity([sec1, sec2, sec3])
+        # Section 2 robotic seam "In this section, " stripped and capitalized
+        self.assertIn("We examine how gradient descent iteratively updates weights", stitched)
+        self.assertNotIn("In this section,", stitched)
+        # Abbreviation expanded for spoken TTS
+        self.assertIn("for example, with small steps", stitched)
+        # Markdown header and bullets stripped
+        self.assertNotIn("###", stitched)
+        self.assertNotIn("- Moving forward,", stitched)
+        self.assertIn("Deep networks build directly on these mathematical foundations", stitched)
+
 
 if __name__ == "__main__":
     unittest.main()
+

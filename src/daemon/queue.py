@@ -18,13 +18,14 @@ TaskStatus = Literal["QUEUED", "PROCESSING", "COMPLETED", "FAILED"]
 @dataclass
 class Task:
     task_id: str
-    source_type: str  # "youtube" or "local_file"
+    source_type: str  # "youtube", "local_file", "notion"
     target: str  # URL or file path
     status: TaskStatus = "QUEUED"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     error_message: str = ""
     retries: int = 0
+    extra_metadata: str = ""
 
 
 class TaskQueue:
@@ -74,10 +75,15 @@ class TaskQueue:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
                     error_message TEXT DEFAULT '',
-                    retries INTEGER DEFAULT 0
+                    retries INTEGER DEFAULT 0,
+                    extra_metadata TEXT DEFAULT ''
                 )
                 """
             )
+            try:
+                conn.execute("ALTER TABLE tasks ADD COLUMN extra_metadata TEXT DEFAULT '';")
+            except Exception:
+                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);")
 
     def _auto_migrate_legacy_json(self) -> None:
@@ -131,7 +137,7 @@ class TaskQueue:
         except Exception as exc:
             logger.debug(f"Mirror sync failed: {exc}")
 
-    def enqueue(self, target: str, source_type: str) -> Task | None:
+    def enqueue(self, target: str, source_type: str, extra_metadata: str = "") -> Task | None:
         """Enqueues a target if not already tracked or completed."""
         task_id = hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
         now = time.time()
@@ -145,10 +151,10 @@ class TaskQueue:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO tasks 
-                (task_id, source_type, target, status, created_at, updated_at, error_message, retries)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (task_id, source_type, target, status, created_at, updated_at, error_message, retries, extra_metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, source_type, target, "QUEUED", now, now, "", 0),
+                (task_id, source_type, target, "QUEUED", now, now, "", 0, extra_metadata),
             )
 
         task = Task(
@@ -158,6 +164,7 @@ class TaskQueue:
             status="QUEUED",
             created_at=now,
             updated_at=now,
+            extra_metadata=extra_metadata,
         )
         self._sync_mirror()
         return task
@@ -169,6 +176,7 @@ class TaskQueue:
                 "SELECT * FROM tasks WHERE status = 'QUEUED' ORDER BY created_at ASC LIMIT 1"
             ).fetchone()
             if row:
+                keys = row.keys()
                 return Task(
                     task_id=row["task_id"],
                     source_type=row["source_type"],
@@ -178,6 +186,7 @@ class TaskQueue:
                     updated_at=row["updated_at"],
                     error_message=row["error_message"],
                     retries=row["retries"],
+                    extra_metadata=row["extra_metadata"] if "extra_metadata" in keys else "",
                 )
         return None
 
@@ -209,6 +218,8 @@ class TaskQueue:
                     updated_at=r["updated_at"],
                     error_message=r["error_message"],
                     retries=r["retries"],
+                    extra_metadata=r["extra_metadata"] if "extra_metadata" in r.keys() else "",
                 )
                 for r in rows
             ]
+

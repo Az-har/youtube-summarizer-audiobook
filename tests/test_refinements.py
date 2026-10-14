@@ -227,6 +227,99 @@ class ArchitecturalRefinementsTests(unittest.TestCase):
         with VRAMGuard.guard("Test_Stage") as acquired:
             self.assertTrue(acquired)
 
+    def test_prepare_chunk_stateful_narrative_context(self):
+        from unittest.mock import patch
+        from src.models import Video
+        from src.processing import _prepare_chunk
+
+        vid = Video("v1", "AI Mastery", "https://url", duration_seconds=1200)
+        segs = [{"start": 0.0, "end": 5.0, "text": "As you can see on the screen, this model learns."}]
+        tail = "This concludes the initial exploration of neural gradients."
+
+        with patch("src.processing._ollama") as mock_ollama:
+            mock_ollama.return_value = {"script": "Continued section.", "removed_segments": [], "warnings": []}
+            res = _prepare_chunk(
+                self.settings,
+                vid,
+                "en",
+                "English",
+                segs,
+                section_idx=2,
+                total_sections=3,
+                chapter_title="Gradient Descent",
+                previous_section_tail=tail,
+            )
+            self.assertIsNotNone(res)
+            prompt = mock_ollama.call_args[0][1]
+            self.assertIn("Current Chapter: Gradient Descent", prompt)
+            self.assertIn("Section: 2 of 3", prompt)
+            self.assertIn("NARRATIVE CONTINUATION REQUIREMENT:", prompt)
+            self.assertIn(tail, prompt)
+            self.assertIn("Translate all visual references", prompt)
+            # Sanitization should have stripped 'As you can see on the screen'
+            self.assertNotIn("As you can see on the screen", prompt)
+            self.assertIn("this model learns", prompt)
+
+    def test_editorial_agent_rolling_continuity_flow(self):
+        from unittest.mock import patch
+        from src.agents.base import AgentContext
+        from src.agents.editorial import EditorialAgent
+        from src.models import TranscriptionResult, Video
+
+        vid = Video("v_long", "Long Talk", "https://url", duration_seconds=1800)
+        working_dir = self.root / "editorial_test"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        context = AgentContext(settings=self.settings, video=vid, working_dir=working_dir)
+
+        # 2 distinct chunks
+        context.transcription_result = TranscriptionResult(
+            transcript_path=working_dir / "t.json",
+            txt_path=working_dir / "t.txt",
+            transcript_data={
+                "language": "en",
+                "segments": [
+                    {"start": 0.0, "end": 10.0, "text": "First chunk text about algorithms."},
+                    {"start": 10.0, "end": 20.0, "text": "Second chunk text about data structures."},
+                ],
+            },
+        )
+
+        calls = []
+
+        def fake_prepare(settings, video, src_lang, tgt_lang, segs, section_idx=1, total_sections=1, chapter_title="", previous_section_tail=""):
+            calls.append({"idx": section_idx, "tail": previous_section_tail})
+            if section_idx == 1:
+                return {"script": "Algorithms provide rigorous problem-solving methods. They form computational foundations."}
+            else:
+                return {"script": "In this section, data structures organize information for efficient algorithmic retrieval."}
+
+        with patch("src.agents.editorial.ensure_ollama_running", return_value=True), \
+             patch("src.agents.editorial.chapter_aware_transcript_chunks", return_value=[
+                 [{"start": 0.0, "end": 10.0, "text": "First"}],
+                 [{"start": 10.0, "end": 20.0, "text": "Second"}],
+             ]), \
+             patch("src.agents.editorial._prepare_chunk", side_effect=fake_prepare):
+
+            agent = EditorialAgent()
+            res = agent.run(context)
+
+            self.assertEqual(len(calls), 2)
+            # Chunk 1 starts with no tail
+            self.assertEqual(calls[0]["tail"], "")
+            # Chunk 2 receives the tail of chunk 1
+            self.assertIn("They form computational foundations.", calls[1]["tail"])
+            # Final script should have had its robotic seam stripped by stitch_narrative_continuity
+            self.assertNotIn("In this section,", res.script)
+            self.assertIn("Data structures organize information", res.script)
+
+    def test_judge_summary_robotic_framing_detection(self):
+        from src.evaluators.summary_evaluator import judge_summary
+        source = "Algorithms structure computation."
+        robotic_draft = "In this section, the speaker discusses how algorithms structure computation."
+        eval_res = judge_summary(self.settings, source, robotic_draft, "English", "detailed_synthesis")
+        self.assertTrue(any("Robotic framing" in issue for issue in eval_res.issues))
+
 
 if __name__ == "__main__":
     unittest.main()
+

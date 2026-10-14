@@ -89,13 +89,19 @@ def judge_summary(
             issues=["Draft script is empty."],
         )
 
-    # Heuristic fast check for sponsor phrases
+    # Heuristic fast check for sponsor phrases and robotic seam clichés
     sponsor_triggers = [
         "like and subscribe", "hit the bell", "sponsor of this video",
         "use code", "link in description", "merch store", "patreon",
         "subscribe to my channel", "brought to you by",
     ]
     detected_sponsor_phrases = [p for p in sponsor_triggers if p in draft_script.lower()]
+
+    cliche_triggers = [
+        "in this section", "in this video", "the speaker discusses", "the speaker explains",
+        "moving forward", "moving on", "as seen on screen", "look at the slide",
+    ]
+    detected_cliches = [c for c in cliche_triggers if c in draft_script.lower()]
 
     prompt = f'''You are an expert Audio Editor and Fact-Checking Critic. Evaluate this draft narration script against the original speech transcript.
 
@@ -131,6 +137,9 @@ Draft Narration Script:
         if detected_sponsor_phrases:
             score -= 2.0 * len(detected_sponsor_phrases)
             issues.extend([f"Detected sponsor phrase: '{p}'" for p in detected_sponsor_phrases])
+        if detected_cliches:
+            score -= 1.0 * len(detected_cliches)
+            issues.extend([f"Robotic framing or visual reference detected: '{c}'" for c in detected_cliches])
         if guard_issues:
             score -= guard_deduction
             issues.extend(guard_issues)
@@ -154,6 +163,12 @@ Draft Narration Script:
             if not any(p in issue.lower() for issue in issues):
                 issues.append(f"Detected sponsor callout: '{p}'")
         ad_removal = min(ad_removal, 5.0)
+
+    if detected_cliches:
+        for c in detected_cliches:
+            if not any(c in issue.lower() for issue in issues):
+                issues.append(f"Robotic framing or visual reference detected: '{c}'")
+        flow = max(1.0, flow - len(detected_cliches) * 1.5)
 
     if guard_issues:
         issues.extend(guard_issues)
@@ -185,25 +200,34 @@ def refine_summary_with_critique(
     source_text: str,
     draft_script: str,
     critique_issues: list[str],
+    previous_section_tail: str = "",
 ) -> dict:
     """
     Self-Healing Agent: Re-generates and refines the draft script incorporating
-    the specific Critic issues identified during valuation.
+    the specific Critic issues identified during valuation and enforcing narrative continuation.
     """
     from src.processing import OllamaClient
 
     issues_formatted = "\n".join(f"- {issue}" for issue in critique_issues)
     task = "near-complete cleaned read-aloud" if video.mode == "clean_readaloud" else "detailed information-first synthesis"
 
+    continuation_directive = ""
+    if previous_section_tail and previous_section_tail.strip():
+        continuation_directive = f'''
+NARRATIVE CONTINUATION REQUIREMENT:
+The previous section concluded with: "{previous_section_tail.strip()}"
+Ensure the refined draft weaves seamlessly from this thought without robotic transitional clichés (NEVER say "In this section", "Next", "Moving on").'''
+
     prompt = f'''You are refining a factual spoken audio digest section. The previous draft received the following critical feedback:
 
 CRITIQUE ISSUES TO FIX:
 {issues_formatted}
+{continuation_directive}
 
 INSTRUCTIONS:
 1. Fix all issues mentioned in the critique above.
-2. Completely remove any leftover sponsor reads, subscribe requests, or promotional chatter.
-3. Ensure natural, fluent, spoken phrasing in {target_language}.
+2. Completely remove any leftover sponsor reads, subscribe requests, promotional chatter, or robotic framing.
+3. Ensure natural, fluent, spoken phrasing in {target_language} suitable for an audiobook.
 4. Return ONLY valid JSON with this exact schema:
 {{"script":"...","removed_segments":[{{"start":0,"end":0,"reason":"..."}}],"warnings":["..."]}}
 
@@ -217,3 +241,4 @@ Previous Flawed Draft:
 {draft_script}'''
 
     return OllamaClient.generate_json(settings.ollama_base_url, settings.ollama_model, prompt)
+

@@ -44,7 +44,13 @@ class DaemonService:
             queue=self.queue,
             input_dir=settings.data_dir / "input",
             playlist_file=settings.root / "playlists.txt",
+            settings=settings,
         )
+        from src.publishers.notion_publisher import NotionPublisher
+        self.notion_publisher: NotionPublisher | None = (
+            NotionPublisher(settings) if settings and settings.notion_api_key else None
+        )
+
 
     def start(self) -> None:
         """Starts the background worker loop."""
@@ -123,11 +129,23 @@ class DaemonService:
                     self.queue.update_status(task.task_id, "FAILED", msg)
                     self.logger.warning(f"Task {task.task_id} failed: {msg}")
 
-            elif task.source_type == "youtube":
+            elif task.source_type in ("youtube", "notion"):
                 videos = get_videos_from_url(task.target, self.settings.ytdlp_binary)
                 if not videos:
                     self.queue.update_status(task.task_id, "FAILED", "No videos found at URL")
                     return
+
+                # Parse extra metadata if present
+                meta = {}
+                if getattr(task, "extra_metadata", ""):
+                    try:
+                        import json
+                        meta = json.loads(task.extra_metadata)
+                    except Exception:
+                        meta = {}
+
+                notion_item_id = meta.get("notion_item_id", "")
+                requested_mode = meta.get("requested_mode", "auto")
 
                 from src.history import completed_ids, append_completed
                 completed = completed_ids(self.settings.completed_file)
@@ -135,24 +153,50 @@ class DaemonService:
                 failure_reasons = []
 
                 for index, video in enumerate(videos, start=1):
+                    if notion_item_id:
+                        video.notion_page_id = notion_item_id
+                    if requested_mode and requested_mode != "auto":
+                        video.requested_mode = requested_mode
+
                     if video.video_id in completed:
                         self.logger.info(f"Skipping already-completed YouTube video: {video.video_id}")
                         continue
-                    self.logger.info(f"Processing YouTube video {index}/{len(videos)}: {video.title}")
+                    self.logger.info(f"Processing YouTube video {index}/{len(videos)}: {video.title} (Mode: {video.mode})")
                     res = process_video_agentic(self.settings, video)
                     if res.status == "completed":
                         append_completed(self.settings.completed_file, video.video_id)
+
+                        # Two-way sync back to Notion if item originated from Notion
+                        if video.notion_page_id and self.notion_publisher:
+                            try:
+                                import json
+                                working_dir = self.settings.data_dir / "videos" / video.video_id
+                                narration_json_path = working_dir / "narration.json"
+                                summary_payload = {}
+                                if narration_json_path.exists():
+                                    summary_payload = json.loads(narration_json_path.read_text(encoding="utf-8"))
+
+                                self.notion_publisher.write_second_brain_summary(
+                                    item_id=video.notion_page_id,
+                                    summary_payload=summary_payload,
+                                    video_title=video.title,
+                                    audio_path=str(res.audio_path or ""),
+                                )
+                                self.logger.info(f"Synced Second Brain summary to Notion page {video.notion_page_id}")
+                            except Exception as n_err:
+                                self.logger.warning(f"Failed syncing to Notion: {n_err}")
                     else:
                         all_succeeded = False
                         failure_reasons.append(f"{video.video_id}: {res.status}")
 
                 if all_succeeded:
                     self.queue.update_status(task.task_id, "COMPLETED")
-                    self.logger.info(f"Completed YouTube task: {task.task_id}")
+                    self.logger.info(f"Completed {task.source_type} task: {task.task_id}")
                 else:
                     err_summary = f"Partial failure: {', '.join(failure_reasons)}"
                     self.queue.update_status(task.task_id, "FAILED", err_summary)
                     self.logger.warning(f"Task {task.task_id} finished with errors: {err_summary}")
+
 
         except Exception as exc:
             self.logger.error(f"Task {task.task_id} failed: {exc}", exc_info=True)

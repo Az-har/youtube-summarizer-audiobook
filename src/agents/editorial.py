@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from src.processing import (
     semantic_transcript_chunks,
 )
 from src.storage import StorageManager
+from src.text_cleaner import stitch_narrative_continuity
 from src.vram_guard import VRAMGuard
 
 logger = logging.getLogger("EditorialAgent")
@@ -94,14 +96,26 @@ class EditorialAgent(BaseAgent):
 
         prepared_chunks = []
         chunk_evaluations = []
+        previous_tail = ""
 
         for idx, chunk in enumerate(chunks, start=1):
             start_ts = _format_time(chunk[0].get("start", 0))
             end_ts = _format_time(chunk[-1].get("end", 0))
+            chapter_title = chunk[0].get("_chapter_title", "")
             print(f"    [{idx}/{len(chunks)}] Section {start_ts} -> {end_ts} [Drafting", end="", flush=True)
 
             with VRAMGuard.guard("Ollama_Editorial"):
-                chunk_res = _prepare_chunk(context.settings, context.video, source_language, target_language, chunk)
+                chunk_res = _prepare_chunk(
+                    context.settings,
+                    context.video,
+                    source_language,
+                    target_language,
+                    chunk,
+                    section_idx=idx,
+                    total_sections=len(chunks),
+                    chapter_title=chapter_title,
+                    previous_section_tail=previous_tail,
+                )
 
                 # Autonomous Critic Valuation Loop
                 source_text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in chunk)
@@ -111,7 +125,14 @@ class EditorialAgent(BaseAgent):
                 if eval_res.status == "FAIL" and eval_res.issues:
                     print(f" -> Critic: {eval_res.score}/10 (FAIL) -> Refining", end="", flush=True)
                     refined_res = refine_summary_with_critique(
-                        context.settings, context.video, source_language, target_language, source_text, draft_script, eval_res.issues
+                        context.settings,
+                        context.video,
+                        source_language,
+                        target_language,
+                        source_text,
+                        draft_script,
+                        eval_res.issues,
+                        previous_section_tail=previous_tail,
                     )
                     if refined_res.get("script", "").strip():
                         chunk_res = refined_res
@@ -123,6 +144,14 @@ class EditorialAgent(BaseAgent):
                 else:
                     print(f" -> Critic: {eval_res.score}/10 ({eval_res.status})]", flush=True)
 
+            # Update rolling previous_tail for the subsequent section's continuation
+            script_text = chunk_res.get("script", "").strip()
+            if script_text:
+                sentences = re.split(r'(?<=[.!?])\s+', script_text)
+                previous_tail = " ".join(sentences[-2:]).strip() if len(sentences) >= 2 else script_text
+                if len(previous_tail) > 250:
+                    previous_tail = previous_tail[-250:].strip()
+
             prepared_chunks.append(chunk_res)
             chunk_evaluations.append(eval_res)
 
@@ -130,12 +159,24 @@ class EditorialAgent(BaseAgent):
             raise ProcessingError("Ollama returned empty narration script for one or more sections.")
 
         avg_critic_score = round(sum(e.score for e in chunk_evaluations) / len(chunk_evaluations), 2) if chunk_evaluations else 9.0
-        final_script = "\n\n".join(item["script"].strip() for item in prepared_chunks)
+        
+        # Pre-TTS Narrative Continuity Stitcher & Prosody Normalization
+        raw_scripts = [item["script"].strip() for item in prepared_chunks if item.get("script")]
+        final_script = stitch_narrative_continuity(raw_scripts)
+
+        # Aggregate Second Brain knowledge structures from chunk results
+        theses = [item["core_thesis"].strip() for item in prepared_chunks if item.get("core_thesis")]
+        aggregated_thesis = " ".join(theses) if theses else (final_script[:350] + "..." if len(final_script) > 350 else final_script)
+        aggregated_models = [m for item in prepared_chunks for m in item.get("mental_models", []) if m]
+        aggregated_actions = [a for item in prepared_chunks for a in item.get("actionable_takeaways", []) if a]
 
         prepared = {
             "target_language": target_language,
             "script": final_script,
             "cleaned_source": final_script,
+            "core_thesis": aggregated_thesis,
+            "mental_models": aggregated_models,
+            "actionable_takeaways": aggregated_actions,
             "removed_segments": [removed for item in prepared_chunks for removed in item.get("removed_segments", [])],
             "warnings": [warning for item in prepared_chunks for warning in item.get("warnings", [])],
             "chunk_count": len(prepared_chunks),
@@ -147,6 +188,7 @@ class EditorialAgent(BaseAgent):
         }
 
         output_path.write_text(json.dumps(prepared, indent=2, ensure_ascii=False), encoding="utf-8")
+
         script_path.write_text(final_script, encoding="utf-8")
 
         self.log(context, f"Editorial Synthesis complete! [Average Critic Score: {avg_critic_score}/10]")
