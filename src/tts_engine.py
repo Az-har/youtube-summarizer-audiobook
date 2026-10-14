@@ -200,7 +200,23 @@ def synthesize_spoken_audio(
         if output_audio.exists() and output_audio.stat().st_size > 1024:
             return output_audio
     except Exception as exc:
-        logger.warning(f"Neural TTS synthesis failed: {exc}")
+        logger.warning(f"Neural TTS synthesis failed ({exc}), checking local Kokoro fallback...")
+        if not is_tamil:
+            try:
+                print("  [Fallback] Attempting local Kokoro-82M synthesis...")
+                engine = KokoroTTSEngine(model_dir=settings.root / "models" / "kokoro")
+                rendered = engine.synthesize(
+                    text=text,
+                    output_audio=output_audio,
+                    voice=settings.kokoro_voice or "af_heart",
+                    speed=settings.kokoro_speed or 1.0,
+                    ffmpeg_bin=settings.ffmpeg_binary or "ffmpeg",
+                )
+                if rendered and output_audio.exists() and output_audio.stat().st_size > 1024:
+                    return output_audio
+            except Exception as k_exc:
+                logger.warning(f"Kokoro fallback also failed: {k_exc}")
+
 
     # 3. Custom command template fallback
     if settings.tts_command_template.strip():

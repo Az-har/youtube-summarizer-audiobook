@@ -13,7 +13,8 @@ build/
 
 # Local AI Models & Binaries (Large Files)
 models/
-tools/
+tools/*
+!tools/*.py
 *.bin
 *.onnx
 
@@ -27,6 +28,8 @@ data/test_tts/
 data/completed_videos.csv
 data/completed_videos.txt
 data/state.json
+data/state.db
+*.db
 assets/generated/
 
 # Media Files

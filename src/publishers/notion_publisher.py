@@ -237,89 +237,161 @@ class NotionPublisher:
         if not self.client or not item_id:
             return False
 
-        try:
-            core_thesis = summary_payload.get("core_thesis") or summary_payload.get("script", "")[:350] + "..."
-            mental_models = summary_payload.get("mental_models", [])
-            actionable_takeaways = summary_payload.get("actionable_takeaways", [])
+    @staticmethod
+    def _chunk_text(text: str, max_len: int = 1800) -> list[str]:
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        chunks: list[str] = []
+        for p in paragraphs:
+            if len(p) <= max_len:
+                chunks.append(p)
+            else:
+                words = p.split()
+                current: list[str] = []
+                curr_len = 0
+                for w in words:
+                    if curr_len + len(w) + 1 > max_len:
+                        if current:
+                            chunks.append(" ".join(current))
+                        current = [w]
+                        curr_len = len(w)
+                    else:
+                        current.append(w)
+                        curr_len += len(w) + 1
+                if current:
+                    chunks.append(" ".join(current))
+        return chunks
 
-            children_blocks: list[dict[str, Any]] = []
+    def _build_second_brain_blocks(
+        self,
+        summary_payload: dict[str, Any],
+        video_title: str,
+        audio_path: str = "",
+    ) -> list[dict[str, Any]]:
+        core_thesis = summary_payload.get("core_thesis") or summary_payload.get("script", "")[:350] + "..."
+        mental_models = summary_payload.get("mental_models", [])
+        actionable_takeaways = summary_payload.get("actionable_takeaways", [])
+        script = summary_payload.get("script", "")
 
-            # 1. Divider & Callout for Core Thesis
-            children_blocks.append({"object": "block", "type": "divider", "divider": {}})
+        children_blocks: list[dict[str, Any]] = []
+
+        # 1. Divider & Callout for Core Thesis
+        children_blocks.append({"object": "block", "type": "divider", "divider": {}})
+        children_blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "icon": {"type": "emoji", "emoji": "🎯"},
+                "rich_text": [
+                    {"type": "text", "text": {"content": "Core Thesis (Signal):\n", "link": None}, "annotations": {"bold": True}},
+                    {"type": "text", "text": {"content": str(core_thesis)[:1800], "link": None}},
+                ],
+            },
+        })
+
+        # 2. Mental Models & Foundational Concepts
+        if mental_models:
             children_blocks.append({
                 "object": "block",
-                "type": "callout",
-                "callout": {
-                    "icon": {"type": "emoji", "emoji": "🎯"},
-                    "rich_text": [
-                        {"type": "text", "text": {"content": "Core Thesis (Signal):\n", "link": None}, "annotations": {"bold": True}},
-                        {"type": "text", "text": {"content": core_thesis, "link": None}},
-                    ],
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "🧠 Mental Models & Key Concepts"}}],
                 },
             })
-
-            # 2. Mental Models & Foundational Concepts
-            if mental_models:
+            for model in mental_models:
+                model_title = model.get("title") or "Key Framework"
+                model_desc = model.get("description") or str(model)
                 children_blocks.append({
                     "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [{"type": "text", "text": {"content": "🧠 Mental Models & Key Concepts"}}],
-                    },
-                })
-                for model in mental_models:
-                    model_title = model.get("title") or "Key Framework"
-                    model_desc = model.get("description") or str(model)
-                    children_blocks.append({
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": [
-                                {"type": "text", "text": {"content": f"{model_title}: ", "link": None}, "annotations": {"bold": True}},
-                                {"type": "text", "text": {"content": model_desc, "link": None}},
-                            ],
-                        },
-                    })
-
-            # 3. Actionable Takeaways
-            if actionable_takeaways:
-                children_blocks.append({
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [{"type": "text", "text": {"content": "⚡ Actionable Takeaways & Tactical Rules"}}],
-                    },
-                })
-                for action in actionable_takeaways:
-                    children_blocks.append({
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": [{"type": "text", "text": {"content": str(action)}}],
-                        },
-                    })
-
-            # 4. Audiobook Audio Reference
-            if audio_path:
-                children_blocks.append({
-                    "object": "block",
-                    "type": "heading_3",
-                    "heading_3": {
-                        "rich_text": [{"type": "text", "text": {"content": "🎧 Audio Digest Reference"}}],
-                    },
-                })
-                children_blocks.append({
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
                         "rich_text": [
-                            {"type": "text", "text": {"content": f"Mastered Audio File: {audio_path}"}},
+                            {"type": "text", "text": {"content": f"{model_title}: ", "link": None}, "annotations": {"bold": True}},
+                            {"type": "text", "text": {"content": str(model_desc)[:1800], "link": None}},
                         ],
                     },
                 })
 
-            # Append blocks to the target page/block
-            self.client.blocks.children.append(block_id=item_id, children=children_blocks)
+        # 3. Actionable Takeaways
+        if actionable_takeaways:
+            children_blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "⚡ Actionable Takeaways & Tactical Rules"}}],
+                },
+            })
+            for action in actionable_takeaways:
+                children_blocks.append({
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [{"type": "text", "text": {"content": str(action)[:1800]}}],
+                    },
+                })
+
+        # 4. Audiobook Audio Reference
+        if audio_path:
+            children_blocks.append({
+                "object": "block",
+                "type": "heading_3",
+                "heading_3": {
+                    "rich_text": [{"type": "text", "text": {"content": "🎧 Audio Digest Reference"}}],
+                },
+            })
+            children_blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {"type": "text", "text": {"content": f"Mastered Audio File: {audio_path}"}},
+                    ],
+                },
+            })
+
+        # 5. Full Summary Script / Transcript
+        if script:
+            children_blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": "📜 Full Summary Script"}}],
+                },
+            })
+            for chunk in self._chunk_text(script, max_len=1800):
+                children_blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"type": "text", "text": {"content": chunk}}],
+                    },
+                })
+
+        return children_blocks
+
+    def write_second_brain_summary(
+        self,
+        item_id: str,
+        summary_payload: dict[str, Any],
+        video_title: str,
+        audio_path: str = "",
+    ) -> bool:
+        """
+        Writes a structured 'Second Brain' formatted summary into the Notion item/page.
+        Includes Core Thesis, Mental Models, Actionable Takeaways, and Narration Reference.
+        """
+        if not self.client or not item_id:
+            return False
+
+        try:
+            children_blocks = self._build_second_brain_blocks(
+                summary_payload=summary_payload,
+                video_title=video_title,
+                audio_path=audio_path,
+            )
+
+            # Append blocks in batches of 100
+            for i in range(0, len(children_blocks), 100):
+                self.client.blocks.children.append(block_id=item_id, children=children_blocks[i:i + 100])
 
             # Update status property if it's a database page
             try:
@@ -345,6 +417,49 @@ class NotionPublisher:
         except Exception as exc:
             logger.error(f"Failed writing Second Brain summary to Notion: {exc}")
             return False
+
+    def create_second_brain_page(
+        self,
+        video_url: str,
+        video_title: str,
+        summary_payload: dict[str, Any],
+        language: str = "English",
+        mode: str = "Summarize",
+        audio_path: str = "",
+    ) -> str | None:
+        """
+        Creates a new page in the configured Notion database with full Second Brain formatting.
+        """
+        if not self.client or not self.settings.notion_database_id:
+            return None
+
+        try:
+            blocks = self._build_second_brain_blocks(
+                summary_payload=summary_payload,
+                video_title=video_title,
+                audio_path=audio_path,
+            )
+            first_batch = blocks[:100]
+            new_page = self.client.pages.create(
+                parent={"database_id": self.settings.notion_database_id},
+                properties={
+                    "Name": {"title": [{"text": {"content": video_title[:100]}}]},
+                    "URL": {"url": video_url},
+                    "Status": {"status": {"name": "Summarized"}},
+                    "Mode": {"select": {"name": mode}},
+                    "Language": {"select": {"name": language}},
+                },
+                children=first_batch,
+            )
+            page_id = new_page.get("id")
+            if page_id and len(blocks) > 100:
+                for i in range(100, len(blocks), 100):
+                    self.client.blocks.children.append(block_id=page_id, children=blocks[i:i + 100])
+            logger.info(f"Created new Second Brain Notion page {page_id} for {video_title}")
+            return page_id
+        except Exception as exc:
+            logger.error(f"Failed creating Second Brain page in Notion: {exc}")
+            return None
 
     def update_publishing_status(self, item_id: str, youtube_url: str) -> bool:
         """
