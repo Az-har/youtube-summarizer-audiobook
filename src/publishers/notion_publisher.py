@@ -65,9 +65,25 @@ class NotionPublisher:
         if not self.client:
             return results
 
-        # Query database rows
-        query_res = self.client.databases.query(database_id=database_id)
-        pages = query_res.get("results", [])
+        # Query database rows: supports databases.query (notion-client 2.x / mocks) and data_sources.query (notion-client 3.x)
+        pages: list[dict[str, Any]] = []
+        if hasattr(getattr(self.client, "databases", None), "query"):
+            try:
+                query_res = self.client.databases.query(database_id=database_id)
+                pages = query_res.get("results", [])
+            except Exception as e:
+                logger.debug(f"databases.query failed: {e}")
+
+        if not pages and hasattr(self.client, "data_sources"):
+            try:
+                db_meta = self.client.databases.retrieve(database_id=database_id)
+                ds_list = db_meta.get("data_sources", []) if isinstance(db_meta, dict) else []
+                if ds_list and isinstance(ds_list, list) and isinstance(ds_list[0], dict):
+                    ds_id = ds_list[0].get("id")
+                    query_res = self.client.data_sources.query(data_source_id=ds_id)
+                    pages = query_res.get("results", []) if isinstance(query_res, dict) else []
+            except Exception as e:
+                logger.error(f"Error querying Notion data source for database {database_id}: {e}")
 
         for page in pages:
             props = page.get("properties", {})
@@ -107,9 +123,36 @@ class NotionPublisher:
 
             title = self._extract_property_text(props.get("Name") or props.get("Title") or props.get("title") or {})
 
+            # Extract language selection (Language / Target Language / Lang)
+            lang_val = self._extract_property_text(
+                props.get("Language")
+                or props.get("language")
+                or props.get("Target Language")
+                or props.get("Target_Language")
+                or props.get("Lang")
+                or props.get("lang")
+                or {}
+            )
+            language = "auto"
+            if "tamil" in lang_val.lower():
+                language = "Tamil"
+            elif "english" in lang_val.lower():
+                language = "English"
+            elif lang_val and lang_val.lower() != "auto":
+                language = lang_val.strip()
+
+            # Also inspect title tags e.g. [Tamil], [English], [ta], [en]
+            if language == "auto" and title:
+                t_lower = title.lower()
+                if "[tamil]" in t_lower or "[ta]" in t_lower:
+                    language = "Tamil"
+                elif "[english]" in t_lower or "[en]" in t_lower:
+                    language = "English"
+
             results.append({
                 "url": url,
                 "mode": mode,
+                "language": language,
                 "item_id": page_id,
                 "title": title or url,
                 "source": "database",
@@ -160,15 +203,25 @@ class NotionPublisher:
             elif "[summarize]" in text.lower() or "[summary]" in text.lower():
                 mode = "absolute_summary"
 
+            # Determine language from inline text tag e.g. [Tamil] or [English]
+            language = "auto"
+            t_lower = text.lower()
+            if "[tamil]" in t_lower or "[ta]" in t_lower:
+                language = "Tamil"
+            elif "[english]" in t_lower or "[en]" in t_lower:
+                language = "English"
+
             results.append({
                 "url": url,
                 "mode": mode,
+                "language": language,
                 "item_id": block_id,
                 "title": text.strip() or url,
                 "source": "page_block",
             })
 
         return results
+
 
     def write_second_brain_summary(
         self,
@@ -277,8 +330,15 @@ class NotionPublisher:
                     },
                 )
             except Exception:
-                # Page might be a plain block or status property named differently; gracefully ignore property update
-                pass
+                try:
+                    self.client.pages.update(
+                        page_id=item_id,
+                        properties={
+                            "Status": {"select": {"name": "Summarized"}},
+                        },
+                    )
+                except Exception:
+                    pass
 
             logger.info(f"Successfully wrote Second Brain summary to Notion item {item_id}")
             return True
@@ -304,7 +364,16 @@ class NotionPublisher:
             )
             updated = True
         except Exception:
-            pass
+            try:
+                self.client.pages.update(
+                    page_id=item_id,
+                    properties={
+                        "Status": {"select": {"name": "Published"}},
+                    },
+                )
+                updated = True
+            except Exception:
+                pass
 
         # 2. Append callout or bookmark block with YouTube URL
         try:

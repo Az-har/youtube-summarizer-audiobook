@@ -89,7 +89,17 @@ class EditorialAgent(BaseAgent):
                 "Please ensure Ollama is installed and running."
             )
 
-        target_language = "Tamil" if transcript.get("language", "").lower().startswith("ta") else "English"
+        # Determine target language: explicit user preference from Notion/Video overrides auto-detection
+        req_lang = (getattr(context.video, "requested_language", "") or "").lower().strip()
+        if req_lang in ("tamil", "ta"):
+            target_language = "Tamil"
+        elif req_lang in ("english", "en"):
+            target_language = "English"
+        elif req_lang and req_lang not in ("auto", "none"):
+            target_language = req_lang.capitalize()
+        else:
+            target_language = "Tamil" if transcript.get("language", "").lower().startswith("ta") else "English"
+
         source_language = transcript.get("language", "unknown")
 
         self.log(context, f"Synthesizing & Fact-Checking {len(chunks)} sections via Local Ollama ({context.settings.ollama_model} -> {target_language})...")

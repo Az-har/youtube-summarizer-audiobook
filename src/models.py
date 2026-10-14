@@ -13,6 +13,7 @@ class Video:
     duration_seconds: int = 0
     raw: dict = field(default_factory=dict)
     requested_mode: str = "auto"
+    requested_language: str = "auto"
     notion_page_id: str = ""
 
     @property

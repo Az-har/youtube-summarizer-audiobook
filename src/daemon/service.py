@@ -146,6 +146,7 @@ class DaemonService:
 
                 notion_item_id = meta.get("notion_item_id", "")
                 requested_mode = meta.get("requested_mode", "auto")
+                requested_language = meta.get("requested_language", "auto")
 
                 from src.history import completed_ids, append_completed
                 completed = completed_ids(self.settings.completed_file)
@@ -157,11 +158,15 @@ class DaemonService:
                         video.notion_page_id = notion_item_id
                     if requested_mode and requested_mode != "auto":
                         video.requested_mode = requested_mode
+                    if requested_language and requested_language != "auto":
+                        video.requested_language = requested_language
 
                     if video.video_id in completed:
                         self.logger.info(f"Skipping already-completed YouTube video: {video.video_id}")
                         continue
-                    self.logger.info(f"Processing YouTube video {index}/{len(videos)}: {video.title} (Mode: {video.mode})")
+                    lang_tag = f", Lang: {video.requested_language}" if video.requested_language != "auto" else ""
+                    self.logger.info(f"Processing YouTube video {index}/{len(videos)}: {video.title} (Mode: {video.mode}{lang_tag})")
+
                     res = process_video_agentic(self.settings, video)
                     if res.status == "completed":
                         append_completed(self.settings.completed_file, video.video_id)

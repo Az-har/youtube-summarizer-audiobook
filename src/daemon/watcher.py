@@ -75,17 +75,20 @@ class IngestionWatcher:
                     url = item.get("url", "")
                     if not url:
                         continue
+                    lang_label = item.get("language", "auto")
                     meta = json.dumps({
                         "notion_item_id": item.get("item_id", ""),
                         "requested_mode": item.get("mode", "auto"),
+                        "requested_language": lang_label,
                         "title": item.get("title", ""),
                     })
                     task = self.queue.enqueue(url, source_type="notion", extra_metadata=meta)
                     if task:
                         mode_label = item.get("mode", "auto")
-                        self.logger.info(f"Detected new Notion link ({mode_label}): {url}")
-                        print(f"  [Watcher] Enqueued Notion link [{mode_label}]: {url}", flush=True)
+                        self.logger.info(f"Detected new Notion link [{mode_label} / {lang_label}]: {url}")
+                        print(f"  [Watcher] Enqueued Notion link [{mode_label} / {lang_label}]: {url}", flush=True)
                         enqueued_count += 1
+
             except Exception as exc:
                 self.logger.warning(f"Error polling Notion for links: {exc}")
 

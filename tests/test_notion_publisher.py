@@ -33,6 +33,7 @@ class TestNotionPublisher(unittest.TestCase):
                         "URL": {"type": "url", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
                         "Status": {"type": "status", "status": {"name": "To Process"}},
                         "Mode": {"type": "select", "select": {"name": "Summarize"}},
+                        "Language": {"type": "select", "select": {"name": "Tamil"}},
                     },
                 },
                 {
@@ -53,11 +54,13 @@ class TestNotionPublisher(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["url"], "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         self.assertEqual(items[0]["mode"], "absolute_summary")
+        self.assertEqual(items[0]["language"], "Tamil")
         self.assertEqual(items[0]["item_id"], "page_123")
 
     @patch("notion_client.Client")
     def test_fetch_from_page(self, mock_client_cls):
         mock_client = MagicMock()
+
         mock_client_cls.return_value = mock_client
         mock_client.blocks.children.list.return_value = {
             "results": [
@@ -65,7 +68,7 @@ class TestNotionPublisher(unittest.TestCase):
                     "id": "block_1",
                     "type": "paragraph",
                     "paragraph": {
-                        "rich_text": [{"plain_text": "[Translate] Check this out: https://youtu.be/video1"}]
+                        "rich_text": [{"plain_text": "[Tamil] [Translate] Check this out: https://youtu.be/video1"}]
                     },
                 },
                 {
@@ -92,9 +95,12 @@ class TestNotionPublisher(unittest.TestCase):
 
         self.assertEqual(len(items), 2)
         self.assertEqual(items[0]["mode"], "translate")
+        self.assertEqual(items[0]["language"], "Tamil")
         self.assertEqual(items[0]["url"], "https://youtu.be/video1")
         self.assertEqual(items[1]["mode"], "absolute_summary")
+        self.assertEqual(items[1]["language"], "auto")
         self.assertEqual(items[1]["url"], "https://youtu.be/video2")
+
 
     @patch("notion_client.Client")
     def test_write_second_brain_summary(self, mock_client_cls):
