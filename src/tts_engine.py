@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import subprocess
 import urllib.request
@@ -23,6 +24,8 @@ class KokoroTTSEngine:
     Produces studio-quality human voice cadence, natural inflection, and breathing.
     Runs 100% locally and free on CPU or GPU via onnxruntime.
     """
+
+    _cached_instances: dict[tuple[str, str], Any] = {}
 
     def __init__(self, model_dir: Path | None = None) -> None:
         self.model_dir = model_dir or (Path("models") / "kokoro")
@@ -65,12 +68,69 @@ class KokoroTTSEngine:
         temp_dest.replace(dest_path)
 
     def get_instance(self):
+        cache_key = (str(self.model_path.resolve()), str(self.voices_path.resolve()))
+        if cache_key in self._cached_instances:
+            self._kokoro_instance = self._cached_instances[cache_key]
+            return self._kokoro_instance
+
         if self._kokoro_instance is None:
             self.ensure_models()
             from kokoro_onnx import Kokoro
             logger.info(f"Initializing Kokoro-82M from {self.model_path}")
             self._kokoro_instance = Kokoro(str(self.model_path), str(self.voices_path))
+            self._cached_instances[cache_key] = self._kokoro_instance
         return self._kokoro_instance
+
+    @staticmethod
+    def _split_into_speech_units(text: str, max_chars: int = 300) -> list[str]:
+        """
+        Splits text into bite-sized speech units (<= max_chars) along natural punctuation boundaries.
+        Guarantees that Kokoro-82M never exceeds phoneme token limits or truncates audio.
+        """
+        text = text.strip()
+        if not text:
+            return []
+        if len(text) <= max_chars:
+            return [text]
+
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        units: list[str] = []
+        current: list[str] = []
+        curr_len = 0
+
+        for s in sentences:
+            s = s.strip()
+            if not s:
+                continue
+            if curr_len + len(s) + 1 <= max_chars:
+                current.append(s)
+                curr_len += len(s) + 1
+            else:
+                if current:
+                    units.append(" ".join(current))
+                    current = []
+                    curr_len = 0
+                if len(s) <= max_chars:
+                    current.append(s)
+                    curr_len = len(s)
+                else:
+                    # Sentence exceeds max_chars: split on sub-clause punctuation
+                    clauses = re.split(r'(?<=[,;—])\s+', s)
+                    for c in clauses:
+                        c = c.strip()
+                        if not c:
+                            continue
+                        if curr_len + len(c) + 1 <= max_chars:
+                            current.append(c)
+                            curr_len += len(c) + 1
+                        else:
+                            if current:
+                                units.append(" ".join(current))
+                            current = [c]
+                            curr_len = len(c)
+        if current:
+            units.append(" ".join(current))
+        return units
 
     def synthesize(
         self,
@@ -90,28 +150,37 @@ class KokoroTTSEngine:
         kokoro = self.get_instance()
         voice_style = voice or "af_heart"
 
-        # Split text into manageable paragraphs/sentences to maintain audio fidelity
+        # Split text into paragraphs first
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
         if not paragraphs:
             paragraphs = [text.strip()]
 
+        # Split each paragraph into token-safe speech units (<=300 chars)
+        speech_units: list[tuple[str, bool]] = []  # (unit_text, is_paragraph_end)
+        for p in paragraphs:
+            units = self._split_into_speech_units(p, max_chars=300)
+            for i, u in enumerate(units):
+                is_end = (i == len(units) - 1)
+                speech_units.append((u, is_end))
+
         audio_segments: list[np.ndarray] = []
         sample_rate = 24000
 
-        for idx, paragraph in enumerate(paragraphs, start=1):
-            if not paragraph:
+        for idx, (unit_text, is_paragraph_end) in enumerate(speech_units, start=1):
+            if not unit_text.strip():
                 continue
             try:
                 samples, sample_rate = kokoro.create(
-                    paragraph,
+                    unit_text,
                     voice=voice_style,
                     speed=speed,
                     lang="en-us",
                 )
                 if samples is not None and len(samples) > 0:
                     audio_segments.append(samples)
-                    # Add 350ms of natural breath pause between paragraphs
-                    pause = np.zeros(int(sample_rate * 0.35), dtype=np.float32)
+                    # Natural breath pause: 350ms between paragraphs, 150ms between intra-paragraph sentences
+                    pause_sec = 0.35 if is_paragraph_end else 0.15
+                    pause = np.zeros(int(sample_rate * pause_sec), dtype=np.float32)
                     audio_segments.append(pause)
             except Exception as exc:
                 logger.warning(f"Kokoro synthesis failed on segment {idx}: {exc}")

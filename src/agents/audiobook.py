@@ -46,30 +46,39 @@ class AudiobookAgent(BaseAgent):
             context.audiobook_result = res
             return res
 
-        # 1. Synthesize neural speech
-        self.log(context, f"Directing Neural Voice Synthesis ({target_language})...")
-        rendered = synthesize(context.settings, script_path, output_audio, target_language)
+        # 1. Synthesize neural speech (or reuse verified mastered audio)
+        cached_before = StorageManager.is_audiobook_cached(output_audio)
+        if cached_before:
+            self.log(context, f"Verified mastered audiobook found on disk ({output_audio.stat().st_size // 1024} KB).")
+            rendered = cached_before
+            was_cached = True
+        else:
+            self.log(context, f"Directing Neural Voice Synthesis ({target_language})...")
+            rendered = synthesize(context.settings, script_path, output_audio, target_language)
+            was_cached = False
 
         if not rendered or not output_audio.exists() or output_audio.stat().st_size <= 1024:
             raise ProcessingError("Audiobook synthesis failed to produce a valid audio file.")
 
         # 2. Master Audio (EBU R128 Loudness Normalization + Dynamic Range Polish)
-        mastered_audio = context.working_dir / "narration_mastered.mp3"
-        ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
+        # Skip re-mastering if audio was already cached/mastered to prevent compression loss
+        if not was_cached:
+            mastered_audio = context.working_dir / "narration_mastered.mp3"
+            ffmpeg_bin = _find_ffmpeg(context.settings.ffmpeg_binary)
 
-        self.log(context, "Mastering audiobook with EBU R128 loudness normalization (linear mode)...")
-        try:
-            cmd = [
-                ffmpeg_bin, "-y", "-i", str(output_audio),
-                "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-45dB",
-                "-c:a", "libmp3lame", "-b:a", "192k", str(mastered_audio)
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
-            if mastered_audio.exists() and mastered_audio.stat().st_size > 1024:
-                mastered_audio.replace(output_audio)
-                self.log(context, "Audiobook mastered successfully (192kbps MP3).")
-        except Exception as exc:
-            logger.debug(f"Mastering filter skipped ({exc}), using clean direct audio.")
+            self.log(context, "Mastering audiobook with EBU R128 loudness normalization (linear mode)...")
+            try:
+                cmd = [
+                    ffmpeg_bin, "-y", "-i", str(output_audio),
+                    "-af", "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true, silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-45dB",
+                    "-c:a", "libmp3lame", "-b:a", "192k", str(mastered_audio)
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=120)
+                if mastered_audio.exists() and mastered_audio.stat().st_size > 1024:
+                    mastered_audio.replace(output_audio)
+                    self.log(context, "Audiobook mastered successfully (192kbps MP3).")
+            except Exception as exc:
+                logger.debug(f"Mastering filter skipped ({exc}), using clean direct audio.")
 
         # 3. Embed ID3v2 Tags, Thumbnail Cover Art & Chapter Markers
         from src.metadata_embedder import embed_audiobook_metadata

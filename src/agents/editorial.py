@@ -174,11 +174,60 @@ class EditorialAgent(BaseAgent):
         raw_scripts = [item["script"].strip() for item in prepared_chunks if item.get("script")]
         final_script = stitch_narrative_continuity(raw_scripts)
 
-        # Aggregate Second Brain knowledge structures from chunk results
+        # Aggregate and deduplicate Second Brain knowledge structures from chunk results
         theses = [item["core_thesis"].strip() for item in prepared_chunks if item.get("core_thesis")]
-        aggregated_thesis = " ".join(theses) if theses else (final_script[:350] + "..." if len(final_script) > 350 else final_script)
-        aggregated_models = [m for item in prepared_chunks for m in item.get("mental_models", []) if m]
-        aggregated_actions = [a for item in prepared_chunks for a in item.get("actionable_takeaways", []) if a]
+        if theses:
+            # Consolidate into concise signal: first thesis or joined sentences <= 400 chars
+            joined_th = " ".join(theses)
+            if len(joined_th) > 400:
+                s_list = re.split(r'(?<=[.!?])\s+', joined_th)
+                aggregated_thesis = " ".join(s_list[:2]) if len(s_list) >= 2 else s_list[0]
+                if len(aggregated_thesis) > 400:
+                    aggregated_thesis = aggregated_thesis[:397] + "..."
+            else:
+                aggregated_thesis = joined_th
+        else:
+            aggregated_thesis = ""
+
+        # Deduplicate Mental Models by normalized title
+        raw_models = [m for item in prepared_chunks for m in item.get("mental_models", []) if isinstance(m, dict) and m.get("title")]
+        seen_model_titles = set()
+        aggregated_models: list[dict[str, str]] = []
+        for m in raw_models:
+            m_title = str(m.get("title", "")).strip()
+            norm_key = re.sub(r'[^\w\s]', '', m_title.lower())
+            if norm_key and norm_key not in seen_model_titles:
+                seen_model_titles.add(norm_key)
+                aggregated_models.append({
+                    "title": m_title,
+                    "description": str(m.get("description", "")).strip()
+                })
+            if len(aggregated_models) >= 6:
+                break
+
+        # Deduplicate Actionable Takeaways
+        raw_actions = [a for item in prepared_chunks for a in item.get("actionable_takeaways", []) if a]
+        seen_actions = set()
+        aggregated_actions: list[str] = []
+        for a in raw_actions:
+            a_text = str(a).strip()
+            norm_key = re.sub(r'[^\w\s]', '', a_text.lower())
+            if norm_key and norm_key not in seen_actions:
+                seen_actions.add(norm_key)
+                aggregated_actions.append(a_text)
+            if len(aggregated_actions) >= 8:
+                break
+
+        # Fallback Second Brain Extraction if LLM omitted them (or in translation mode)
+        if not aggregated_thesis or not aggregated_models or not aggregated_actions:
+            from src.publishers.notion_publisher import NotionPublisher
+            fb_thesis, fb_models, fb_actions = NotionPublisher.extract_fallback_second_brain(final_script)
+            if not aggregated_thesis:
+                aggregated_thesis = fb_thesis or (final_script[:350] + "..." if len(final_script) > 350 else final_script)
+            if not aggregated_models:
+                aggregated_models = fb_models
+            if not aggregated_actions:
+                aggregated_actions = fb_actions
 
         prepared = {
             "target_language": target_language,

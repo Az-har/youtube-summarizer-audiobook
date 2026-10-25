@@ -146,6 +146,36 @@ class TestNotionPublisher(unittest.TestCase):
         mock_client.pages.update.assert_called_once()
         mock_client.blocks.children.append.assert_called_once()
 
+    @patch("notion_client.Client")
+    def test_data_source_id_caching(self, mock_client_cls):
+        mock_client = MagicMock()
+        del mock_client.databases.query  # Force data_sources query path
+        mock_client.databases.retrieve.return_value = {
+            "data_sources": [{"id": "ds_cached_123"}]
+        }
+        mock_client.data_sources.query.return_value = {"results": []}
+        mock_client_cls.return_value = mock_client
+
+        pub = NotionPublisher(self.settings)
+        pub._fetch_from_database("db_test_id")
+        pub._fetch_from_database("db_test_id")
+
+        # retrieve should be called only once because ds_id is cached!
+        mock_client.databases.retrieve.assert_called_once_with(database_id="db_test_id")
+        self.assertEqual(mock_client.data_sources.query.call_count, 2)
+
+    def test_fallback_second_brain_extraction(self):
+        sample_script = (
+            "Wealth creation is a crucial topic in personal finance. Compounding Interest means earning interest on past interest over long periods.\n\n"
+            "An Emergency Fund is savings set aside for three to six months of expenses. You must always maintain an emergency reserve before investing in stocks.\n\n"
+            "Asset Allocation represents dividing investments across equity, debt, and gold to minimize volatility."
+        )
+        thesis, models, takeaways = NotionPublisher.extract_fallback_second_brain(sample_script)
+        self.assertTrue(len(thesis) > 10)
+        self.assertGreaterEqual(len(models), 1)
+        self.assertGreaterEqual(len(takeaways), 1)
+        self.assertTrue(any("Emergency Fund" in m["title"] or "Compounding" in m["title"] or "Asset" in m["title"] for m in models))
+
 
 if __name__ == "__main__":
     unittest.main()

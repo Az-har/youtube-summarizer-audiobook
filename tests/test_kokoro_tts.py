@@ -66,6 +66,34 @@ class TestKokoroTTS(unittest.TestCase):
         res = synthesize_spoken_audio(self.settings, self.script_file, self.output_audio, "Tamil")
         self.assertEqual(res, self.output_audio)
 
+    def test_split_into_speech_units_bounds(self):
+        long_paragraph = (
+            "This is a long introductory sentence detailing the foundation of computer science and algorithm design. "
+            "Artificial intelligence models require extensive linear algebra, calculus, and matrix optimizations to function at scale. "
+            "When deploying neural networks in local environments, memory management and inference scheduling become critical bottlenecks. "
+            "Therefore, optimizing model quantization, attention mechanisms, and pipeline throughput guarantees optimal real-time performance."
+        )
+        units = KokoroTTSEngine._split_into_speech_units(long_paragraph, max_chars=180)
+        self.assertGreater(len(units), 1)
+        for u in units:
+            self.assertLessEqual(len(u), 180)
+            self.assertTrue(len(u.strip()) > 0)
+
+    @patch("kokoro_onnx.Kokoro")
+    @patch("src.tts_engine.KokoroTTSEngine.ensure_models")
+    def test_kokoro_shared_instance_cache(self, mock_ensure, mock_kokoro_cls):
+        mock_instance = MagicMock()
+        mock_kokoro_cls.return_value = mock_instance
+
+        engine1 = KokoroTTSEngine(model_dir=self.root / "models" / "kokoro")
+        engine2 = KokoroTTSEngine(model_dir=self.root / "models" / "kokoro")
+
+        inst1 = engine1.get_instance()
+        inst2 = engine2.get_instance()
+
+        self.assertIs(inst1, inst2)
+        mock_kokoro_cls.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

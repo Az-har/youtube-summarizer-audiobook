@@ -22,6 +22,7 @@ class NotionPublisher:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.client = None
+        self._cached_ds_ids: dict[str, str] = {}
         if settings.notion_api_key:
             try:
                 from notion_client import Client
@@ -76,10 +77,15 @@ class NotionPublisher:
 
         if not pages and hasattr(self.client, "data_sources"):
             try:
-                db_meta = self.client.databases.retrieve(database_id=database_id)
-                ds_list = db_meta.get("data_sources", []) if isinstance(db_meta, dict) else []
-                if ds_list and isinstance(ds_list, list) and isinstance(ds_list[0], dict):
-                    ds_id = ds_list[0].get("id")
+                ds_id = self._cached_ds_ids.get(database_id)
+                if not ds_id:
+                    db_meta = self.client.databases.retrieve(database_id=database_id)
+                    ds_list = db_meta.get("data_sources", []) if isinstance(db_meta, dict) else []
+                    if ds_list and isinstance(ds_list, list) and isinstance(ds_list[0], dict):
+                        ds_id = ds_list[0].get("id")
+                        if ds_id:
+                            self._cached_ds_ids[database_id] = ds_id
+                if ds_id:
                     query_res = self.client.data_sources.query(data_source_id=ds_id)
                     pages = query_res.get("results", []) if isinstance(query_res, dict) else []
             except Exception as e:
@@ -222,20 +228,74 @@ class NotionPublisher:
 
         return results
 
+    @staticmethod
+    def extract_fallback_second_brain(text: str) -> tuple[str, list[dict[str, str]], list[str]]:
+        """Extracts Core Thesis, Mental Models, and Actionable Takeaways when omitted."""
+        if not text:
+            return "", [], []
 
-    def write_second_brain_summary(
-        self,
-        item_id: str,
-        summary_payload: dict[str, Any],
-        video_title: str,
-        audio_path: str = "",
-    ) -> bool:
-        """
-        Writes a structured 'Second Brain' formatted summary into the Notion item/page.
-        Includes Core Thesis, Mental Models, Actionable Takeaways, and Narration Reference.
-        """
-        if not self.client or not item_id:
-            return False
+        raw_paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not raw_paras:
+            raw_paras = [text.strip()]
+
+        # 1. Thesis
+        first_p = raw_paras[0]
+        s_list = re.split(r'(?<=[.!?])\s+', first_p)
+        thesis = " ".join(s_list[:3]) if len(s_list) >= 3 else first_p
+        if len(thesis) > 400:
+            thesis = thesis[:397] + "..."
+
+        # 2. Mental Models
+        models: list[dict[str, str]] = []
+        seen = set()
+        concept_pattern = re.compile(
+            r'\b([A-Z][a-zA-Z0-9\s\-_]{2,30}?)\s+(?:is|are|means|refers to|helps|can be defined as|represents|works by)\s+([^.!?]+[.!?])',
+            re.I
+        )
+        for p in raw_paras:
+            for match in concept_pattern.finditer(p):
+                c_title = match.group(1).strip()
+                c_desc = match.group(2).strip()
+                if (
+                    len(c_title) > 3
+                    and not any(w in c_title.lower() for w in ["this", "that", "there", "what", "which", "who", "here", "it"])
+                    and c_title.lower() not in seen
+                    and len(c_desc) > 15
+                ):
+                    seen.add(c_title.lower())
+                    models.append({"title": c_title.title(), "description": f"{c_title} {c_desc}"[:250]})
+                if len(models) >= 5:
+                    break
+            if len(models) >= 5:
+                break
+
+        if len(models) < 3:
+            for p in raw_paras[1:]:
+                s_first = re.split(r'(?<=[.!?])\s+', p)[0]
+                if 40 < len(s_first) < 250:
+                    words = [w for w in s_first.split() if w.isalnum()]
+                    c_title = " ".join(words[:3]).title()
+                    if c_title.lower() not in seen and len(c_title) > 4:
+                        seen.add(c_title.lower())
+                        models.append({"title": c_title, "description": s_first})
+                if len(models) >= 4:
+                    break
+
+        # 3. Actionable Takeaways
+        takeaways: list[str] = []
+        action_keywords = re.compile(
+            r'\b(should|must|need to|crucial|essential|important to|always|never|make sure|start by|avoid|rule|key is|recommend|step is)\b',
+            re.I
+        )
+        all_sentences = re.split(r'(?<=[.!?])\s+', text)
+        for s in all_sentences:
+            s_clean = s.strip()
+            if 25 < len(s_clean) < 280 and action_keywords.search(s_clean) and s_clean not in takeaways:
+                takeaways.append(s_clean)
+            if len(takeaways) >= 6:
+                break
+
+        return thesis, models, takeaways
 
     @staticmethod
     def _chunk_text(text: str, max_len: int = 1800) -> list[str]:
@@ -267,10 +327,20 @@ class NotionPublisher:
         video_title: str,
         audio_path: str = "",
     ) -> list[dict[str, Any]]:
-        core_thesis = summary_payload.get("core_thesis") or summary_payload.get("script", "")[:350] + "..."
-        mental_models = summary_payload.get("mental_models", [])
-        actionable_takeaways = summary_payload.get("actionable_takeaways", [])
+        core_thesis = summary_payload.get("core_thesis")
+        mental_models = list(summary_payload.get("mental_models") or [])
+        actionable_takeaways = list(summary_payload.get("actionable_takeaways") or [])
         script = summary_payload.get("script", "")
+
+        # Auto-extract fallback Second Brain signal if omitted or empty
+        if not core_thesis or not mental_models or not actionable_takeaways:
+            fb_thesis, fb_models, fb_actions = self.extract_fallback_second_brain(script)
+            if not core_thesis:
+                core_thesis = fb_thesis or (script[:350] + "..." if len(script) > 350 else script)
+            if not mental_models:
+                mental_models = fb_models
+            if not actionable_takeaways:
+                actionable_takeaways = fb_actions
 
         children_blocks: list[dict[str, Any]] = []
 

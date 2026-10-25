@@ -37,6 +37,7 @@ class TaskQueue:
     def __init__(self, state_file: Path) -> None:
         self.state_file = state_file
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._last_mirror_sync: float = 0.0
 
         if self.state_file.suffix.lower() == ".json":
             self.db_path = self.state_file.with_suffix(".db")
@@ -124,10 +125,14 @@ class TaskQueue:
         except Exception as exc:
             logger.debug(f"Legacy migration notice: {exc}")
 
-    def _sync_mirror(self) -> None:
+    def _sync_mirror(self, force: bool = False) -> None:
         """Keeps JSON mirror up to date for human readability and inspection."""
         if not self.json_mirror_path:
             return
+        now = time.time()
+        if not force and (now - self._last_mirror_sync < 1.0):
+            return
+        self._last_mirror_sync = now
         try:
             tasks = self.list_tasks()
             data = {t.task_id: asdict(t) for t in tasks}

@@ -60,6 +60,30 @@ class DaemonTests(unittest.TestCase):
         self.assertIn("local_file", types)
         self.assertIn("youtube", types)
 
+    def test_watcher_notion_poll_interval_throttling(self):
+        from unittest.mock import MagicMock
+        mock_notion = MagicMock()
+        mock_notion.is_configured.return_value = True
+        mock_notion.fetch_pending_links.return_value = [
+            {"url": "https://youtu.be/test_poll", "item_id": "item1", "mode": "auto", "language": "auto"}
+        ]
+        self.watcher.notion_publisher = mock_notion
+        self.watcher.notion_poll_interval = 100.0  # 100s throttle
+
+        # 1. First scan triggers Notion fetch
+        enq1 = self.watcher.scan_and_enqueue()
+        self.assertEqual(enq1, 1)
+        self.assertEqual(mock_notion.fetch_pending_links.call_count, 1)
+
+        # 2. Immediate second scan is throttled by notion_poll_interval
+        enq2 = self.watcher.scan_and_enqueue()
+        self.assertEqual(enq2, 0)
+        self.assertEqual(mock_notion.fetch_pending_links.call_count, 1)
+
+        # 3. Forcing poll bypasses the throttle
+        self.watcher.scan_and_enqueue(force_notion=True)
+        self.assertEqual(mock_notion.fetch_pending_links.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

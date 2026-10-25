@@ -727,4 +727,70 @@ To solve transcript disfluency, chunk amnesia, and TTS prosodic stiffness, a com
 | **Live Audition Test** | `tests/test_tamil_tts.py` | Standalone Execution | **PASS** | Downloaded Kokoro weights and synthesized `data/tests/sample_english_audio.mp3` (329 KB) with human cadence. |
 | **Full Regression Suite** | Full Project Discovery | `tests/` | **PASS** | **70/70 unit and integration tests pass cleanly** (`Ran 70 tests in 40.884s, OK`). |
 
+---
+
+## 11. Architectural Critique & Optimization: Daemon Polling Throttling, Kokoro Token Safety, Audio Double-Mastering Guard & Second Brain Deduplication `[SOLVED]`
+
+### 11.1. In-Depth Critique of Identified Flaws
+
+#### 1. IngestionWatcher High-Frequency Notion Polling Loop (DoS & Rate Limit Hazard)
+- **Location**: [`src/daemon/watcher.py:scan_and_enqueue`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/daemon/watcher.py)
+- **Critique**: The autonomous daemon executes with a 5-second poll loop. Within `scan_and_enqueue()`, `self.notion_publisher.fetch_pending_links()` executed on every iteration without throttling. In an active 24/7 background process, this resulted in **17,280 HTTPS requests per day** fired to Notion's cloud endpoints.
+- **Resource Impact**: Excessive socket allocations, TLS handshake overhead, severe threat of Notion HTTP 429 Rate Limiting, and log pollution.
+- **Recommendation**: Decouple remote Notion synchronization from the local filesystem watcher. Poll local media and playlists every 5 seconds, while throttling Notion API polling to a dedicated configurable interval (default: 30 seconds).
+- **Resolution**: Implemented `notion_poll_interval = 30.0` with `_last_notion_poll_time` timestamp tracking and an opt-in `force_notion` override in `IngestionWatcher.scan_and_enqueue()`.
+
+#### 2. Redundant Notion Database Metadata Retrieval (Data Source ID Round-Trip)
+- **Location**: [`src/publishers/notion_publisher.py:_fetch_from_database`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/publishers/notion_publisher.py)
+- **Critique**: Under `notion-client 3.x`, database row querying requires resolving the underlying `data_source_id`. `_fetch_from_database` called `client.databases.retrieve(database_id)` on **every single poll** to obtain the `data_source_id` before querying `client.data_sources.query(data_source_id)`.
+- **Resource Impact**: Doubled the number of Notion API network round-trips for every poll. Because the database-to-data-source mapping is immutable, re-fetching schema metadata was completely redundant.
+- **Recommendation**: Cache `database_id -> data_source_id` in an in-memory dictionary.
+- **Resolution**: Added `self._cached_ds_ids: dict[str, str]` caching inside `NotionPublisher`, skipping the preliminary `databases.retrieve` call on all subsequent polls.
+
+#### 3. Kokoro-82M Model Reload Overhead & Token Length Overflow in Long Paragraphs
+- **Location**: [`src/tts_engine.py:KokoroTTSEngine`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/tts_engine.py)
+- **Critique**: 
+  1. `synthesize_spoken_audio()` re-instantiated `KokoroTTSEngine` on every invocation, causing `Kokoro(...)` to re-read the 310MB ONNX model and 27MB voice vectors from disk into RAM every time audio was synthesized.
+  2. `KokoroTTSEngine.synthesize()` split text only on `\n\n` boundaries. For dense, unbroken summary paragraphs exceeding 500 characters, `kokoro-onnx` exceeded phonemizer token limits, resulting in silence truncation or token overflow errors.
+- **Resource Impact**: Unnecessary disk I/O, latency spikes during batch processing, and speech synthesis dropouts on long sentences.
+- **Recommendation**: Implement a shared class-level warm instance cache for Kokoro ONNX sessions, and implement intelligent sub-clause/sentence chunking ($\le 300$ characters) prior to audio generation.
+- **Resolution**: Added `KokoroTTSEngine._cached_instances` warm singleton dictionary and `KokoroTTSEngine._split_into_speech_units()` with punctuation-aware sub-chunking ($\le 300$ chars), pairing 350ms paragraph breath pauses with 150ms intra-paragraph breath pauses.
+
+#### 4. Audio Double-Mastering & Dynamic Range Loss in AudiobookAgent
+- **Location**: [`src/agents/audiobook.py:run`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/agents/audiobook.py)
+- **Critique**: When `synthesize()` was called on an already existing/cached `narration.mp3`, `AudiobookAgent` unconditionally ran `ffmpeg -af loudnorm=I=-16:LRA=11...` and re-compressed with `libmp3lame 192k`.
+- **Resource Impact**: Re-applying lossy MP3 compression on an already mastered audio file degrades acoustic fidelity (generation loss and dynamic range squashing) while burning 5–15 seconds of CPU time per file.
+- **Recommendation**: Inspect `StorageManager.is_audiobook_cached()` before synthesis; if the audio file was verified and cached from a prior run, bypass the FFmpeg `loudnorm` step.
+- **Resolution**: Added `cached_before` check and `was_cached` guard in `AudiobookAgent.run()`, skipping re-mastering for cached audio assets.
+
+#### 5. Second Brain Knowledge Extraction Fallback & Multi-Chunk Deduplication
+- **Location**: [`src/agents/editorial.py`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/agents/editorial.py) & [`src/publishers/notion_publisher.py`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/publishers/notion_publisher.py)
+- **Critique**:
+  1. In translation mode or when the Ollama LLM returned empty arrays for `mental_models` or `actionable_takeaways`, `narration.json` stored empty lists. When synced to Notion, pages were missing the Second Brain sections entirely.
+  2. For multi-chunk videos (5–10 sections), `EditorialAgent` concatenated all chunk theses into an overlong runaway paragraph, and duplicated identical mental model titles and takeaways across chunks.
+- **Resource Impact**: Incomplete Notion knowledge pages for translated media, text bloat, and repetitive bullet points.
+- **Recommendation**: Implement automatic deterministic signal extraction as a fallback for missing Second Brain fields, and deduplicate mental models and action items across chunk boundaries.
+- **Resolution**:
+  - Added `NotionPublisher.extract_fallback_second_brain()` wired as an authoritative safety net in both `EditorialAgent` and `NotionPublisher._build_second_brain_blocks()`.
+  - Added case-insensitive normalized deduplication in `EditorialAgent`: caps top 6 unique mental models and top 8 actionable takeaways, while condensing multi-chunk theses into a punchy $\le 400$-character signal statement.
+
+#### 6. Shadowed Stub Dead Code in `src/publishers/notion_publisher.py`
+- **Location**: [`src/publishers/notion_publisher.py:226-239`](file:///d:/Progamming/Youtube%20Video%20Summarization%20&%20Audio%20Book/src/publishers/notion_publisher.py)
+- **Critique**: An incomplete, leftover method signature `write_second_brain_summary()` was stranded between `_fetch_from_page` and `_chunk_text`, immediately shadowed by the true implementation further down in the file.
+- **Resolution**: Completely eliminated the dead stub method.
+
+---
+
+### 11.2. Verification & Stability Matrix
+
+| Component | Test Case | Location | Status | Verified Capability |
+| :--- | :--- | :--- | :---: | :--- |
+| **Watcher Throttle** | `test_watcher_notion_poll_interval_throttling` | `tests/test_daemon.py` | **PASS** | Validates that Notion polling is throttled by `notion_poll_interval` (30s) while local watcher continues at 5s. |
+| **Data Source Cache** | `test_data_source_id_caching` | `tests/test_notion_publisher.py` | **PASS** | Confirms `databases.retrieve` is called only once; subsequent queries reuse the cached `ds_id`. |
+| **Second Brain Fallback** | `test_fallback_second_brain_extraction` | `tests/test_notion_publisher.py` | **PASS** | Asserts extraction of Core Thesis, Mental Models, and Takeaways from plain text transcripts. |
+| **Kokoro Unit Splitting** | `test_split_into_speech_units_bounds` | `tests/test_kokoro_tts.py` | **PASS** | Guarantees all sub-sentence units are bounded $\le 180$ chars to prevent phonemizer token overflow. |
+| **Kokoro Instance Cache** | `test_kokoro_shared_instance_cache` | `tests/test_kokoro_tts.py` | **PASS** | Confirms warm in-memory model reuse across consecutive engine instances without reloading from disk. |
+| **Full Regression Suite** | Full Project Discovery | `tests/` | **PASS** | **75/75 unit and integration tests pass cleanly** (`Ran 75 tests in 41.642s, OK`). |
+
+
 
